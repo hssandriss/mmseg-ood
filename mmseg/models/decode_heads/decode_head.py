@@ -270,6 +270,8 @@ class BaseDecodeHead(BaseModule, metaclass=ABCMeta):
     @force_fp32(apply_to=('seg_logit', ))
     def losses(self, seg_logit, seg_label):
         """Compute segmentation loss."""
+        # TODO: Implement use of Bags and Groups
+        import ipdb; ipdb.set_trace()
         loss = dict()
         if self.downsample_label_ratio > 0:
             seg_label = seg_label.float()
