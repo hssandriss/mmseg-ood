@@ -141,7 +141,6 @@ def train_segmentor(model,
             not cfg.optimizer_config else cfg.optimizer_config
 
     # register hooks
-    # import ipdb; ipdb.set_trace()
     runner.register_training_hooks(cfg.lr_config, cfg.optimizer_config,
                                    cfg.checkpoint_config, cfg.log_config,
                                    cfg.get('momentum_config', None))
