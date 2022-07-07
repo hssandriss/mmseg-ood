@@ -271,9 +271,6 @@ class BaseDecodeHead(BaseModule, metaclass=ABCMeta):
     @force_fp32(apply_to=('seg_logit', ))
     def losses(self, seg_logit, seg_label):
         """Compute segmentation loss."""
-        # unfold_fold(seg_label)
-        # edge_detector(seg_label)
-
         loss = dict()
         if self.downsample_label_ratio > 0:
             seg_label = seg_label.float()
