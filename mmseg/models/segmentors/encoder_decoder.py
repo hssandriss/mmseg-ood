@@ -313,20 +313,26 @@ class EncoderDecoder(BaseSegmentor):
         seg_pred = list(seg_pred)
         return seg_pred
 
-    def aug_test_logits(self, img, img_metas, rescale=True):
-        """Test with augmentations.
+    def freeze_encoder(self):
+        self.backbone.frozen_stages = self.backbone.num_stages
+        self.backbone._freeze_stages()
 
-        Return seg_map logits. Only rescale=True is supported.
-        """
-        # aug_test rescale all imgs back to ori_shape for now
-        assert rescale
+    def freeze_feature_extractor(self):
 
-        imgs = img
-        seg_logit = self.inference(imgs[0], img_metas[0], rescale)
-        for i in range(1, len(imgs)):
-            cur_seg_logit = self.inference(imgs[i], img_metas[i], rescale)
-            seg_logit += cur_seg_logit
+        to_eval(self, 'EncoderDecoder')
+        filtered = []
+        for name, param in self.named_parameters():
+            if 'conv_seg' not in name and 'loss_decode' not in name:
+                param.requires_grad = False
+                print(name, "has gradient disabled")
+            else:
+                filtered.append(name)
+        self.decode_head.frozen_features = True
 
-        seg_logit /= len(imgs)
-        seg_logit = seg_logit.cpu().numpy()
-        return seg_logit
+
+def to_eval(module, module_key):
+    if 'conv_seg' not in module_key and 'loss_decode' not in module_key:
+        module.training = False
+        print(module_key, "is set to eval mode")
+    for child_key, child in module.named_children():
+        to_eval(child, module_key + "." + child_key)
