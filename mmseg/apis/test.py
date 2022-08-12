@@ -43,7 +43,7 @@ def plot_mask(mask, file):
 def plot_conf(conf, file):
     plt.figure()
     sns.heatmap(
-        1 - conf.squeeze(),
+        conf.squeeze(),
         xticklabels=False, yticklabels=False).get_figure().savefig(file)
     plt.cla(); plt.clf(); plt.close('all')
 
@@ -146,12 +146,20 @@ def single_gpu_test(model,
                     out_file=out_file[:-4] + "_gt" + out_file[-4:],
                     opacity=opacity)
 
-                # 1-MSP confidence map
+                # max prob confidence map
                 if not model.module.decode_head.use_bags:
                     if model.module.decode_head.loss_decode.loss_name.startswith("loss_edl"):
-                        pass
+                        num_cls = seg_logit.shape[1]
+                        seg_evidence = model.module.decode_head.loss_decode.logit2evidence(seg_logit)
+                        alpha = seg_evidence + 1
+                        probs = alpha / alpha.sum(dim=1, keepdim=True)
+                        u = num_cls / alpha.sum(dim=1, keepdim=True)
+                        # import ipdb; ipdb.set_trace()
+                        plot_conf(1 - u.cpu().numpy(), out_file[: -4] + "_edl_1_minus_u" + out_file[-4:])
+                        plot_conf(probs.max(dim=1)[0].cpu().numpy(), out_file[: -4] + "_edl_conf" + out_file[-4:])
                     else:
-                        plot_conf(F.softmax(seg_logit, dim=1), out_file[: -4] + "_conf" + out_file[-4:])
+                        probs = F.softmax(seg_logit, dim=1)
+                        plot_conf(probs.max(dim=1)[0].cpu().numpy(), out_file[: -4] + "_sm_conf" + out_file[-4:])
                 # Mask for edges between separate labels
                 plot_mask(dataset.edge_detector(seg_gt).cpu().numpy(), out_file[: -4] + "_edge_mask" + out_file[-4:])
                 # Mask of ood samples

@@ -19,7 +19,7 @@ from mmseg.apis import multi_gpu_test, single_gpu_test
 from mmseg.datasets import build_dataloader, build_dataset
 from mmseg.models import build_segmentor
 from mmseg.utils import build_ddp, build_dp, get_device, setup_multi_processes
-from tensorboardX import SummaryWriter
+from torch.utils.tensorboard import SummaryWriter
 
 import json
 import re
@@ -125,6 +125,7 @@ def parse_args():
 
 def main():
     import warnings; warnings.filterwarnings("ignore")
+    import ipdb; ipdb.set_trace()
     args = parse_args()
     assert args.out or args.eval or args.format_only or args.show \
         or args.show_dir, \
@@ -236,7 +237,7 @@ def main():
         all_checkpoints = [all_checkpoints[index_last]]
         all_checkpoints_iter = [all_checkpoints_iter[index_last]]
     if args.all:
-        writer = SummaryWriter(log_dir=os.path.join(args.work_dir, "tf_logs"))
+        writer = SummaryWriter(log_dir=os.path.join(args.work_dir, "tf_logs_test"))
     ans = []
 
     for i, checkpoint in enumerate(all_checkpoints):
@@ -421,12 +422,6 @@ def main():
     with open(os.path.join(args.work_dir, f"test_results_all_{suffixe}.json" if args.all else f"test_results_{suffixe}.json"), "w") as f:
         json.dump(ans, f)
     ood_summary.to_csv(os.path.join(args.work_dir, f'ood_metrics_{suffixe}.csv'))
-    # title = "Test OOD metrics (" + os.path.basename(args.work_dir) + ")"
-
-    # ax = ood_summary.plot(x="epoch", y=[c for c in ood_summary.columns if c != "epoch"], ylim=(0, 100), y_ticks=tick_vals, title=title, legend=True)
-    # fig = plt.figure()
-    # ax = ood_summary.plot(x="epoch", y=[c for c in ood_summary.columns if c != "epoch"],
-    #                       ylim=(0, 1), yticks=tick_vals, title=title, legend=True, subplots=True)
 
 
 if __name__ == '__main__':

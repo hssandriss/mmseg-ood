@@ -105,6 +105,10 @@ def parse_args():
         '--freeze-encoder',
         action='store_true',
         help='freeze latent representation')
+    parser.add_argument(
+        '--init-not-frozen',
+        action='store_true',
+        help='freeze features till last layer')
 
     args = parser.parse_args()
     if 'LOCAL_RANK' not in os.environ:
@@ -268,6 +272,7 @@ def main():
     meta.update(cfg.checkpoint_config.meta)
     meta["freeze_features"] = args.freeze_features
     meta["freeze_encoder"] = args.freeze_encoder
+    meta["init_not_frozen"] = args.init_not_frozen
     train_segmentor(
         model,
         datasets,
