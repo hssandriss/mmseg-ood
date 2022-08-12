@@ -49,7 +49,8 @@ def cross_entropy(pred,
         weight=class_weight,
         reduction='none',
         ignore_index=ignore_index,
-        label_smoothing=label_smoothing)
+        label_smoothing=label_smoothing
+    )
 
     # apply weights and do the reduction
     # average loss over non-ignored elements

@@ -42,10 +42,10 @@ def mse_edl_loss(one_hot_gt, alpha, num_classes):
     return A, B, C
 
 
-def ce_edl_loss(one_hot_gt, alpha, num_classes, func):
+def ce_edl_loss(one_hot_gt, alpha, num_classes, func, c):
     strength = torch.sum(alpha, dim=1, keepdim=True)
     # L_err
-    A = torch.sum(one_hot_gt * (func(strength) - func(alpha)), axis=1, keepdims=True)
+    A = torch.sum(one_hot_gt * (c * func(strength) - func(alpha)), axis=1, keepdims=True)
     # L_kl
     alpha_kl = (alpha - 1) * (1 - one_hot_gt) + 1
     C = KL(alpha_kl, num_classes)
@@ -116,10 +116,10 @@ class EDLLoss(nn.Module):
             A, B, C = mse_edl_loss(one_hot_gt, alpha, self.num_classes)
             loss = A + B + self.lam * C
         elif self.loss_name.endswith("ce"):  # Eq. 4 CrossEntropy
-            A, C = ce_edl_loss(one_hot_gt, alpha, self.num_classes, func=torch.digamma)
+            A, C = ce_edl_loss(one_hot_gt, alpha, self.num_classes, func=torch.digamma, c=1.)  # self.epoch_num / self.total_epochs
             loss = A + self.lam * C
         elif self.loss_name.endswith("mll"):  # Eq. 3 Maximum Likelihood Type II
-            A, C = ce_edl_loss(one_hot_gt, alpha, self.num_classes, func=torch.log)
+            A, C = ce_edl_loss(one_hot_gt, alpha, self.num_classes, func=torch.log, c=1.)  # self.epoch_num / self.total_epochs
             loss = A + self.lam * C
         else:
             raise NotImplementedError
@@ -184,6 +184,10 @@ class EDLLoss(nn.Module):
         elif self.annealing_method == 'exp':
             annealing_start = torch.tensor(self.annealing_start, dtype=torch.float32)
             annealing_coef = annealing_start * torch.exp(-torch.log(annealing_start) / self.total_epoch * self.epoch_num)
+        elif self.annealing_method == 'stairs':
+            annealing_coef = torch.tensor(0.1 * (self.epoch_num // 5), dtype=torch.float32)
+        elif self.annealing_method == 'zero':
+            annealing_coef = torch.tensor(0., dtype=torch.float32)
         else:
             raise NotImplementedError
         return annealing_coef

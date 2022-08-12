@@ -36,6 +36,8 @@ class EncoderDecoder(BaseSegmentor):
         self.backbone = builder.build_backbone(backbone)
         if neck is not None:
             self.neck = builder.build_neck(neck)
+        self.decode_head_cfg = decode_head
+        self.auxiliary_head_cfg = auxiliary_head
         self._init_decode_head(decode_head)
         self._init_auxiliary_head(auxiliary_head)
 
@@ -318,7 +320,6 @@ class EncoderDecoder(BaseSegmentor):
         self.backbone._freeze_stages()
 
     def freeze_feature_extractor(self):
-
         to_eval(self, 'EncoderDecoder')
         filtered = []
         for name, param in self.named_parameters():
@@ -327,6 +328,7 @@ class EncoderDecoder(BaseSegmentor):
                 print(name, "has gradient disabled")
             else:
                 filtered.append(name)
+        print("Filtered:", filtered)
         self.decode_head.frozen_features = True
 
 
