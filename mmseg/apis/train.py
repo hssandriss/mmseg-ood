@@ -12,7 +12,7 @@ from mmcv.runner import (HOOKS, DistSamplerSeedHook, EpochBasedRunner,
 from mmcv.utils import build_from_cfg
 
 from mmseg import digit_version
-from mmseg.core import DistEvalHook, EvalHook, ParseEpochToLossHook, build_optimizer
+from mmseg.core import DistEvalHook, EvalHook, ParseEpochToLossHook, TensorboardLoggerHook_, TextLoggerHook_, build_optimizer
 from mmseg.datasets import build_dataloader, build_dataset
 from mmseg.utils import (build_ddp, build_dp, find_latest_checkpoint,
                          get_root_logger)
@@ -125,8 +125,9 @@ def train_segmentor(model,
             'config is now expected to have a `runner` section, '
             'please set `runner` in your config.', UserWarning)
 
-    freeze_features = meta.pop("freeze_features")
-    freeze_encoder = meta.pop("freeze_encoder")
+    freeze_features = meta.pop("freeze_features", False)
+    freeze_encoder = meta.pop("freeze_encoder", False)
+    init_not_frozen = meta.pop("init_not_frozen", False)
     assert not (freeze_encoder and freeze_features), "freeze encoder and freeze features are mutually exclusive"
     runner = build_runner(
         cfg.runner,
@@ -145,11 +146,13 @@ def train_segmentor(model,
 
     # register hooks
     runner.register_training_hooks(cfg.lr_config, cfg.optimizer_config,
-                                   cfg.checkpoint_config, cfg.log_config,
+                                   cfg.checkpoint_config,  # cfg.log_config,
                                    cfg.get('momentum_config', None))
 
     runner.register_hook(ParseEpochToLossHook(), priority='NORMAL')
-
+    runner.register_hook(TextLoggerHook_(**{k: v for k, v in cfg.log_config.items() if k != 'hooks'}))
+    runner.register_hook(TensorboardLoggerHook_(**{k: v for k, v in cfg.log_config.items() if k != 'hooks'}))
+    # import ipdb; ipdb.set_trace()
     if distributed:
         # when distributed training by epoch, using`DistSamplerSeedHook` to set
         # the different seed to distributed sampler for each epoch, it will
@@ -204,6 +207,23 @@ def train_segmentor(model,
         else:
             runner.resume(cfg.resume_from)
     elif cfg.load_from:
+
+        if freeze_encoder and init_not_frozen:
+            ckpt = torch.load(cfg.load_from)
+            to_keep = [k for k in ckpt["state_dict"].keys() if k.startswith('backbone')]
+            to_delete = [k for k in ckpt["state_dict"].keys() if not k.startswith('backbone')]
+            for k in to_delete:
+                del ckpt["state_dict"][k]
+            cfg.load_from = os.path.join(cfg.work_dir, "src.pth")
+            torch.save(ckpt, cfg.load_from)
+        if freeze_features and init_not_frozen:
+            ckpt = torch.load(cfg.load_from)
+            to_delete = [k for k in ckpt["state_dict"].keys() if k.startswith("decode_head.conv_seg")]
+            to_keep = [k for k in ckpt["state_dict"].keys() if not k.startswith('decode_head.conv_seg')]
+            for k in to_delete:
+                del ckpt["state_dict"][k]
+            cfg.load_from = os.path.join(cfg.work_dir, "src.pth")
+            torch.save(ckpt, cfg.load_from)
         runner.load_checkpoint(cfg.load_from)
     if freeze_features:
         model.module.freeze_feature_extractor()
