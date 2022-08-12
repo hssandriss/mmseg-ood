@@ -36,6 +36,8 @@ class EncoderDecoder(BaseSegmentor):
         self.backbone = builder.build_backbone(backbone)
         if neck is not None:
             self.neck = builder.build_neck(neck)
+        self.decode_head_cfg = decode_head
+        self.auxiliary_head_cfg = auxiliary_head
         self._init_decode_head(decode_head)
         self._init_auxiliary_head(auxiliary_head)
 
@@ -137,8 +139,7 @@ class EncoderDecoder(BaseSegmentor):
 
         losses = dict()
 
-        loss_decode = self._decode_head_forward_train(x, img_metas,
-                                                      gt_semantic_seg)
+        loss_decode = self._decode_head_forward_train(x, img_metas, gt_semantic_seg)
         losses.update(loss_decode)
 
         if self.with_auxiliary_head:
@@ -252,10 +253,26 @@ class EncoderDecoder(BaseSegmentor):
     def simple_test(self, img, img_meta, rescale=True):
         """Simple test with single image."""
         seg_logit = self.inference(img, img_meta, rescale)
-        seg_pred = F.softmax(seg_logit, dim=1).argmax(dim=1)
-        seg_pred_max_softmax = F.softmax(seg_logit, dim=1).max(dim=1)[0]
-        seg_pred_max_logit = seg_logit.max(dim=1)[0]
-        seg_pred_entropy = - (F.softmax(seg_logit, dim=1) * F.softmax(seg_logit, dim=1).log()).sum(1)
+        if self.decode_head.use_bags:
+            raw_logits = seg_logit[:, :-self.decode_head.bags_kwargs["num_bags"], :, :]
+            smp = torch.zeros_like(raw_logits)
+            is_other = torch.zeros_like(seg_logit[:, :self.decode_head.bags_kwargs["num_bags"], :, :])
+            for bag_idx in range(self.decode_head.bags_kwargs["num_bags"]):
+                cp_seg_logit = seg_logit.detach().clone()
+                bag_seg_logit = cp_seg_logit[:, self.decode_head.bags_kwargs["bag_masks"][bag_idx], :, :]
+                bag_smp = F.softmax(bag_seg_logit, dim=1)
+                oth_index = bag_smp.shape[1] - 1
+                is_other[:, bag_idx, :, :] = (bag_smp.argmax(dim=1) == oth_index)
+                bag_smp_no_other = bag_smp[:, :oth_index, :, :]
+                mask = self.decode_head.bags_kwargs["bag_masks"][bag_idx][:-self.decode_head.bags_kwargs["num_bags"]]
+                smp[:, mask, :, :] = bag_smp_no_other
+                # logits[:, mask, :, :] = bag_seg_logit_no_other
+
+            seg_pred_all_other = is_other.all(1, True)
+            seg_pred = smp.argmax(dim=1)
+        else:
+            raw_logits = seg_logit
+            seg_pred = F.softmax(seg_logit, dim=1).argmax(dim=1)  # change here
         if torch.onnx.is_in_onnx_export():
             # our inference backend only support 4D output
             seg_pred = seg_pred.unsqueeze(0)
@@ -263,9 +280,7 @@ class EncoderDecoder(BaseSegmentor):
         seg_pred = seg_pred.cpu().numpy()
         # unravel batch dim
         seg_pred = list(seg_pred)
-        return seg_pred, {"max_softmax": seg_pred_max_softmax.cpu().numpy(),
-                          "max_logit": seg_pred_max_logit.cpu().numpy(),
-                          "entropy": seg_pred_entropy.cpu().numpy()}
+        return seg_pred, seg_logit
 
     def aug_test(self, imgs, img_metas, rescale=True):
         """Test with augmentations.
@@ -285,3 +300,27 @@ class EncoderDecoder(BaseSegmentor):
         # unravel batch dim
         seg_pred = list(seg_pred)
         return seg_pred
+
+    def freeze_encoder(self):
+        self.backbone.frozen_stages = self.backbone.num_stages
+        self.backbone._freeze_stages()
+
+    def freeze_feature_extractor(self):
+        to_eval(self, 'EncoderDecoder')
+        filtered = []
+        for name, param in self.named_parameters():
+            if 'conv_seg' not in name and 'loss_decode' not in name:
+                param.requires_grad = False
+                print(name, "has gradient disabled")
+            else:
+                filtered.append(name)
+        print("Filtered:", filtered)
+        self.decode_head.frozen_features = True
+
+
+def to_eval(module, module_key):
+    if 'conv_seg' not in module_key and 'loss_decode' not in module_key:
+        module.training = False
+        print(module_key, "is set to eval mode")
+    for child_key, child in module.named_children():
+        to_eval(child, module_key + "." + child_key)

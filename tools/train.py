@@ -19,6 +19,7 @@ from mmseg.datasets import build_dataset
 from mmseg.models import build_segmentor
 from mmseg.utils import (collect_env, get_device, get_root_logger,
                          setup_multi_processes)
+import subprocess
 
 
 def parse_args():
@@ -85,7 +86,7 @@ def parse_args():
         '--experiment-tag', '--tag', type=str, default='',
         help="Extra tag to characterize the experiment (modified hyperparams...)"
     )
-
+    parser.add_argument("--use-bags", action='store_true', help='determines weather to use bags of predictors')
     parser.add_argument(
         '--launcher',
         choices=['none', 'pytorch', 'slurm', 'mpi'],
@@ -96,6 +97,19 @@ def parse_args():
         '--auto-resume',
         action='store_true',
         help='resume from the latest checkpoint automatically.')
+    parser.add_argument(
+        '--freeze-features',
+        action='store_true',
+        help='freeze features till last layer')
+    parser.add_argument(
+        '--freeze-encoder',
+        action='store_true',
+        help='freeze latent representation')
+    parser.add_argument(
+        '--init-not-frozen',
+        action='store_true',
+        help='freeze features till last layer')
+
     args = parser.parse_args()
     if 'LOCAL_RANK' not in os.environ:
         os.environ['LOCAL_RANK'] = str(args.local_rank)
@@ -115,6 +129,10 @@ def parse_args():
 
 def main():
     args = parse_args()
+    import gc
+
+    gc.collect()
+    torch.cuda.empty_cache()
 
     cfg = Config.fromfile(args.config)
     if args.cfg_options is not None:
@@ -201,6 +219,26 @@ def main():
     meta['seed'] = seed
     meta['exp_name'] = osp.basename(args.config)
 
+    datasets = [build_dataset(cfg.data.train)]
+    if len(cfg.workflow) == 2:
+        val_dataset = copy.deepcopy(cfg.data.val)
+        val_dataset.pipeline = cfg.data.train.pipeline
+        datasets.append(build_dataset(val_dataset))
+    if cfg.checkpoint_config is not None:
+        # save mmseg version, config file content and class names in
+        # checkpoints as meta data
+        cfg.checkpoint_config.meta = dict(
+            mmseg_version=f'{__version__}+{get_git_hash()[:7]}',
+            config=cfg.pretty_text,
+            CLASSES=datasets[0].CLASSES,
+            PALETTE=datasets[0].PALETTE)
+
+    # Used by bags, ldam...
+    # datasets[0].get_class_count()
+    if args.use_bags:
+        datasets[0].get_bags()
+        cfg.model.decode_head.num_classes += datasets[0].num_bags
+
     model = build_segmentor(
         cfg.model,
         train_cfg=cfg.get('train_cfg'),
@@ -216,25 +254,25 @@ def main():
         model = revert_sync_batchnorm(model)
 
     logger.info(model)
-
-    datasets = [build_dataset(cfg.data.train)]
-    if len(cfg.workflow) == 2:
-        val_dataset = copy.deepcopy(cfg.data.val)
-        val_dataset.pipeline = cfg.data.train.pipeline
-        datasets.append(build_dataset(val_dataset))
-    if cfg.checkpoint_config is not None:
-        # save mmseg version, config file content and class names in
-        # checkpoints as meta data
-        cfg.checkpoint_config.meta = dict(
-            mmseg_version=f'{__version__}+{get_git_hash()[:7]}',
-            config=cfg.pretty_text,
-            CLASSES=datasets[0].CLASSES,
-            PALETTE=datasets[0].PALETTE)
+    if args.use_bags:
+        setattr(model.decode_head, "use_bags", True)
+        setattr(model.decode_head, "bags_kwargs", dict(
+                num_bags=datasets[0].num_bags,
+                label2bag=datasets[0].label2bag,
+                bag_label_maps=datasets[0].bag_label_maps,
+                bag_masks=datasets[0].bag_masks,
+                bags_classes=datasets[0].bags_classes,
+                bag_class_counts=datasets[0].bag_class_counts
+                ))
+    else:
+        setattr(model.decode_head, "use_bags", False)
     # add an attribute for visualization convenience
     model.CLASSES = datasets[0].CLASSES
-    # datasets[0].get_class_count()
     # passing checkpoint meta for saving best checkpoint
     meta.update(cfg.checkpoint_config.meta)
+    meta["freeze_features"] = args.freeze_features
+    meta["freeze_encoder"] = args.freeze_encoder
+    meta["init_not_frozen"] = args.init_not_frozen
     train_segmentor(
         model,
         datasets,
@@ -243,6 +281,19 @@ def main():
         validate=(not args.no_validate),
         timestamp=timestamp,
         meta=meta)
+
+    # When testing on cityscapes use roadanomaly
+    conf = args.config.replace("cityscapes", "roadanomaly")
+    if not args.use_bags:
+        subprocess.run(["python", os.path.join("tools", "test.py"),
+                        conf, "--work-dir", cfg.work_dir, "--eval", "mIoU",
+                        # "--show-dir", os.path.join(cfg.work_dir, "test_results_img"),
+                        ], cwd=".")
+    else:
+        subprocess.run(["python", os.path.join("tools", "test.py"),
+                        conf, "--work-dir", cfg.work_dir, "--eval", "mIoU", "--use-bags",
+                        # "--show-dir", os.path.join(cfg.work_dir, "test_results_img"),
+                        ], cwd=".")
 
 
 if __name__ == '__main__':

@@ -125,6 +125,9 @@ def train_segmentor(model,
             'config is now expected to have a `runner` section, '
             'please set `runner` in your config.', UserWarning)
 
+    freeze_features = meta.pop("freeze_features")
+    freeze_encoder = meta.pop("freeze_encoder")
+    assert not (freeze_encoder and freeze_features), "freeze encoder and freeze features are mutually exclusive"
     runner = build_runner(
         cfg.runner,
         default_args=dict(
@@ -136,12 +139,12 @@ def train_segmentor(model,
             meta=meta))
 
     # register hooks
-    # import ipdb; ipdb.set_trace()
     runner.register_training_hooks(cfg.lr_config, cfg.optimizer_config,
                                    cfg.checkpoint_config, cfg.log_config,
                                    cfg.get('momentum_config', None))
 
     runner.register_hook(ParseEpochToLossHook(), priority='NORMAL')
+
     if distributed:
         # when distributed training by epoch, using`DistSamplerSeedHook` to set
         # the different seed to distributed sampler for each epoch, it will
@@ -193,4 +196,9 @@ def train_segmentor(model,
         runner.resume(cfg.resume_from)
     elif cfg.load_from:
         runner.load_checkpoint(cfg.load_from)
+    if freeze_features:
+        model.module.freeze_feature_extractor()
+    if freeze_encoder:
+        model.module.freeze_encoder()
+
     runner.run(data_loaders, cfg.workflow)

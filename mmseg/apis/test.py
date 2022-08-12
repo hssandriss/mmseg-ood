@@ -2,7 +2,7 @@
 import os.path as osp
 import tempfile
 import warnings
-
+import torch.nn.functional as F
 import mmcv
 import numpy as np
 import torch
@@ -11,6 +11,7 @@ from mmcv.image import tensor2imgs
 from mmcv.runner import get_dist_info
 import seaborn as sns; sns.set_theme()
 import matplotlib.pyplot as plt
+from sklearn.metrics import confusion_matrix
 
 
 def np2tmp(array, temp_file_name=None, tmpdir=None):
@@ -31,6 +32,20 @@ def np2tmp(array, temp_file_name=None, tmpdir=None):
             suffix='.npy', delete=False, dir=tmpdir).name
     np.save(temp_file_name, array)
     return temp_file_name
+
+
+def plot_mask(mask, file):
+    plt.figure()
+    sns.heatmap(mask.squeeze(), xticklabels=False, yticklabels=False).get_figure().savefig(file)
+    plt.cla(); plt.clf(); plt.close('all')
+
+
+def plot_conf(conf, file):
+    plt.figure()
+    sns.heatmap(
+        conf.squeeze(),
+        xticklabels=False, yticklabels=False).get_figure().savefig(file)
+    plt.cla(); plt.clf(); plt.close('all')
 
 
 def single_gpu_test(model,
@@ -78,9 +93,8 @@ def single_gpu_test(model,
         'exclusive, only one of them could be true .'
 
     model.eval()
+    assert data_loader.batch_size == 1, "TEST SCRIPT ONLY WORKS WITH BATCH SIZE=1"
     results = []
-    results_in_scores = {"max_softmax": [], "max_logit": [], "entropy": []}
-    results_out_scores = {"max_softmax": [], "max_logit": [], "entropy": []}
     dataset = data_loader.dataset
     prog_bar = mmcv.ProgressBar(len(dataset))
     # The pipeline about how the data_loader retrieval samples from dataset:
@@ -91,17 +105,10 @@ def single_gpu_test(model,
     loader_indices = data_loader.batch_sampler
     for batch_indices, data in zip(loader_indices, data_loader):
         with torch.no_grad():
-            result, pred_confs = model(return_loss=False, **data)
-        has_ood = False
-        if hasattr(dataset, "ood_indices"):
-            assert len(batch_indices) == 1
-            out_scores, in_scores = dataset.get_in_out_conf(pred_confs, batch_indices[0])
-            if (len(next(iter(out_scores.values()))) != 0) and (len(next(iter(in_scores.values()))) != 0):
-                has_ood = True
-                for k in ("max_softmax", "max_logit", "entropy"):
-                    results_in_scores[k].append(in_scores[k])
-                    results_out_scores[k].append(out_scores[k])
+            result, seg_logit = model(return_loss=False, **data)  # returns labels and logits
 
+        seg_logit = seg_logit.detach()
+        seg_gt = dataset.get_gt_seg_map_by_idx_and_reduce_zero_label(batch_indices[0])
 
         if (show or out_dir):
             # produce 3 images
@@ -122,7 +129,7 @@ def single_gpu_test(model,
                     out_file = osp.join(out_dir, img_meta['ori_filename'])
                 else:
                     out_file = None
-
+                # Todo implement bg mask and set it to transparent color
                 model.module.show_result(
                     img_show,
                     result,
@@ -130,31 +137,34 @@ def single_gpu_test(model,
                     show=show,
                     out_file=out_file,
                     opacity=opacity)
-                if has_ood:
-                    seg_gt = dataset.get_gt_seg_map_by_idx(batch_indices[0])
-                    if dataset.reduce_zero_label:
-                        seg_gt[seg_gt == 0] = 255
-                        seg_gt = seg_gt - 1
-                        seg_gt[seg_gt == 254] = 255
-                    ood_mask = (seg_gt == dataset.ood_indices[0]).astype(np.uint8)
-                    model.module.show_result(
-                        img_show,
-                        [seg_gt, ],
-                        palette=dataset.PALETTE,
-                        show=show,
-                        out_file=out_file[:-4] + "_gt" + out_file[-4:],
-                        opacity=opacity)
-                    plt.cla(); plt.clf()
-                    plt.figure()
-                    # 1-MSP
-                    sns.heatmap(
-                        1 - pred_confs["max_softmax"],
-                        xticklabels=False, yticklabels=False).get_figure().savefig(
-                        out_file[: -4] + "_conf" + out_file[-4:])
-                    plt.cla(); plt.clf()
-                    plt.figure()
-                    sns.heatmap(ood_mask, xticklabels=False, yticklabels=False).get_figure().savefig(out_file[:-4] + "_ood_mask" + out_file[-4:])
-                    plt.cla(); plt.clf()
+
+                model.module.show_result(
+                    img_show,
+                    [seg_gt, ],
+                    palette=dataset.PALETTE,
+                    show=show,
+                    out_file=out_file[:-4] + "_gt" + out_file[-4:],
+                    opacity=opacity)
+
+                # max prob confidence map
+                if not model.module.decode_head.use_bags:
+                    if model.module.decode_head.loss_decode.loss_name.startswith("loss_edl"):
+                        num_cls = seg_logit.shape[1]
+                        seg_evidence = model.module.decode_head.loss_decode.logit2evidence(seg_logit)
+                        alpha = seg_evidence + 1
+                        probs = alpha / alpha.sum(dim=1, keepdim=True)
+                        u = num_cls / alpha.sum(dim=1, keepdim=True)
+                        # import ipdb; ipdb.set_trace()
+                        plot_conf(1 - u.cpu().numpy(), out_file[: -4] + "_edl_1_minus_u" + out_file[-4:])
+                        plot_conf(probs.max(dim=1)[0].cpu().numpy(), out_file[: -4] + "_edl_conf" + out_file[-4:])
+                    else:
+                        probs = F.softmax(seg_logit, dim=1)
+                        plot_conf(probs.max(dim=1)[0].cpu().numpy(), out_file[: -4] + "_sm_conf" + out_file[-4:])
+                # Mask for edges between separate labels
+                plot_mask(dataset.edge_detector(seg_gt).cpu().numpy(), out_file[: -4] + "_edge_mask" + out_file[-4:])
+                # Mask of ood samples
+                if hasattr(dataset, "ood_indices"):
+                    plot_mask((seg_gt == dataset.ood_indices[0]).astype(np.uint8), out_file[:-4] + "_ood_mask" + out_file[-4:])
 
         if efficient_test:
             result = [np2tmp(_, tmpdir='.efficient_test') for _ in result]
@@ -165,7 +175,22 @@ def single_gpu_test(model,
         if pre_eval:
             # TODO: adapt samples_per_gpu > 1.
             # only samples_per_gpu=1 valid now
-            result = dataset.pre_eval(result, indices=batch_indices)
+            # For originally included metrics mIOU
+            result_seg = dataset.pre_eval(result, indices=batch_indices)[0]
+            # For added metrics OOD, calibration
+            if not model.module.decode_head.use_bags:
+                if model.module.decode_head.loss_decode.loss_name.startswith("loss_edl"):
+                    # For EDL probs
+                    seg_evidence = model.module.decode_head.loss_decode.logit2evidence(seg_logit)
+                    result_oth = dataset.pre_eval_custom(seg_evidence, seg_gt, "edl")
+                else:
+                    # For softmax probs
+                    result_oth = dataset.pre_eval_custom(seg_logit, seg_gt, "softmax")
+            else:
+                result_oth = dataset.pre_eval_custom(seg_evidence, seg_gt, "softmax",
+                                                     model.module.decode_head.use_bags,
+                                                     model.module.decode_head.bags_kwargs)
+            result = [(result_seg, result_oth)]
             results.extend(result)
         else:
             results.extend(result)
@@ -173,15 +198,7 @@ def single_gpu_test(model,
         batch_size = len(result)
         for _ in range(batch_size):
             prog_bar.update()
-    # all result shall be changed into a dict to make it simpler
-    results_ = {
-        "seg_pre_results": results,
-        "ood_pre_resuts": {
-            "in_dist_conf": results_in_scores,
-            "oo_dist_conf": results_out_scores
-        }
-    }
-    return results_
+    return results
 
 
 def multi_gpu_test(model,

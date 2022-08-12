@@ -4,7 +4,7 @@ _base_ = [
     '../_base_/schedules/schedule_70e.py'
 ]
 model = dict(
-    decode_head=dict(align_corners=True),
+    decode_head=dict(align_corners=True, num_classes=19,),
     # auxiliary_head=dict(align_corners=True),
     # test_cfg=dict(mode='slide', crop_size=(720, 720), stride=(513, 513)),
 
