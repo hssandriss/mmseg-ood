@@ -241,7 +241,8 @@ def main():
     if args.use_bags:
         datasets[0].get_bags()
         cfg.model.decode_head.num_classes += datasets[0].num_bags
-
+    if cfg.model.decode_head.loss_decode.type == 'EDLLoss':
+        cfg.model.decode_head.loss_decode['total_epochs'] = cfg.runner.max_epochs
     model = build_segmentor(
         cfg.model,
         train_cfg=cfg.get('train_cfg'),

@@ -15,7 +15,7 @@ from .builder import DATASETS
 from .pipelines import Compose, LoadAnnotations
 import torch.nn.functional as F
 import torch
-from torchmetrics.functional import calibration_error
+from torchmetrics.functional import calibration_error, pearson_corrcoef
 from ..utils import brierscore
 
 
@@ -302,19 +302,20 @@ class CustomDataset(Dataset):
                 strength = alpha.sum(dim=1, keepdim=True)
                 u = num_cls / strength
                 probs = alpha / strength
-                seg_max_prob = 1 - u
-                # seg_max_prob = probs.max(dim=1)[0]
+                # seg_max_prob = 1 - u
+                seg_max_prob = probs.max(dim=1)[0]
                 seg_max_logit = seg_logit_flat.max(dim=1)[0]
                 seg_entropy = - (probs * probs.log()).sum(1)
                 seg_entropy = (torch.lgamma(alpha).sum(1, keepdim=True) - torch.lgamma(strength) -
                                (num_cls - strength) * torch.digamma(strength) -
                                ((alpha - 1.0) * torch.digamma(alpha)).sum(1, keepdim=True))
-
+                seg_u = u.squeeze()
             else:
                 probs = F.softmax(seg_logit_flat, dim=1)
                 seg_max_prob = probs.max(dim=1)[0]
                 seg_max_logit = seg_logit_flat.max(dim=1)[0]
                 seg_entropy = - (probs * probs.log()).sum(1)
+                seg_u = torch.ones_like(seg_max_prob) - seg_max_prob
             # seg_pred_all_other = torch.zeros_like(seg_logit_flat, dtype=torch.bool)
         else:
             assert 'num_bags' in bags_kwargs and 'bag_masks' in bags_kwargs
@@ -348,6 +349,10 @@ class CustomDataset(Dataset):
                 auroc_prob, aupr_prob, fpr_prob = self.evaluate_ood(out_scores_probs, in_scores_probs)
                 probs_ood = np.array([auroc_prob, aupr_prob, fpr_prob])
 
+                out_scores_u, in_scores_u = self.get_in_out_conf(seg_u.cpu().numpy(), seg_gt_tensor_flat.cpu().numpy(), "u")
+                auroc_u, aupr_u, fpr_u = self.evaluate_ood(out_scores_u, in_scores_u)
+                u_ood = np.array([auroc_u, aupr_u, fpr_u])
+
                 out_scores_logit, in_scores_logit = self.get_in_out_conf(seg_max_logit.cpu().numpy(), seg_gt_tensor_flat.cpu().numpy(), "max_logit")
                 auroc_logit, aupr_logit, fpr_logit = self.evaluate_ood(out_scores_logit, in_scores_logit)
                 logit_ood = np.array([auroc_logit, aupr_logit, fpr_logit])
@@ -355,12 +360,15 @@ class CustomDataset(Dataset):
                 out_scores_entropy, in_scores_entropy = self.get_in_out_conf(seg_entropy.cpu().numpy(), seg_gt_tensor_flat.cpu().numpy(), "entropy")
                 auroc_entropy, aupr_entropy, fpr_entropy = self.evaluate_ood(out_scores_entropy, in_scores_entropy)
                 entropy_ood = np.array([auroc_entropy, aupr_entropy, fpr_entropy])
-                ood_metrics = (np.hstack((probs_ood, logit_ood, entropy_ood)), True)
+
+                corr_max_prob_u = np.array([pearson_corrcoef(seg_max_prob, seg_u)])
+
+                ood_metrics = (np.hstack((probs_ood, u_ood, logit_ood, entropy_ood, corr_max_prob_u)), True)
             else:
-                ood_metrics = (np.array([0. for _ in range(9)]), True)
+                ood_metrics = (np.array([0. for _ in range(13)]), False)
         else:
             # Puts nans otherwise
-            ood_metrics = (np.array([0. for _ in range(9)]), False)
+            ood_metrics = (np.array([0. for _ in range(13)]), False)
 
         # Calibration/Confidence metrics for closed set
         if not hasattr(self, "ood_indices"):
@@ -372,7 +380,8 @@ class CustomDataset(Dataset):
             ece_l1 = calibration_error(probs_no_bg, seg_gt_tensor_flat_no_bg, norm='l1', ).item()
             ece_l2 = calibration_error(probs_no_bg, seg_gt_tensor_flat_no_bg, norm='l2').item()
             brier = brierscore(probs_no_bg, seg_gt_tensor_flat_no_bg, reduction="mean").item()
-            calib_metrics = np.array([nll, ece_l1, ece_l2, brier])
+            corr_max_prob_u = pearson_corrcoef(seg_max_prob, seg_u).item()
+            calib_metrics = np.array([nll, ece_l1, ece_l2, brier, corr_max_prob_u])
 
             per_cls_prob = [0. for _ in range(num_cls)]
             per_cls_u = [0. for _ in range(num_cls)]
@@ -391,7 +400,7 @@ class CustomDataset(Dataset):
             per_cls_strength = np.array(per_cls_strength)
             per_cls_conf_metrics = (per_cls_prob, per_cls_u, per_cls_strength)
         else:
-            calib_metrics = np.array([0 for _ in range(4)])
+            calib_metrics = np.array([0 for _ in range(5)])
             per_cls_prob = np.array([0. for _ in range(num_cls)])
             per_cls_u = np.array([0. for _ in range(num_cls)])
             per_cls_strength = np.array([0. for _ in range(num_cls)])
@@ -582,8 +591,9 @@ class CustomDataset(Dataset):
         ret_metrics.pop('aEce1', None)
         ret_metrics.pop('aEce2', None)
         ret_metrics.pop('aBrierScore', None)
-
-        ood_metrics = tuple(f"{a}.{b}" for a in ("max_prob", "max_logit", "entropy") for b in ("auroc", "aupr", "fpr95"))
+        ret_metrics.pop('aBrierScore', None)
+        ret_metrics.pop("aCorrMaxprobU", None)
+        ood_metrics = [f"{a}.{b}" for a in ("max_prob", "u", "max_logit", "entropy") for b in ("auroc", "aupr", "fpr95")] + ["ood_corr_max_prob_u"]
         # remove ood metrics ret_metrics_summary
         for k in ood_metrics:
             ret_metrics_summary.pop(k, None)
@@ -608,7 +618,7 @@ class CustomDataset(Dataset):
             class_table_data.add_column(key, val)
         summary_table_data = PrettyTable()
         for key, val in ret_metrics_summary.items():
-            if key in ('aAcc', 'aNll', 'aEce1', 'aEce2', 'aBrierScore'):
+            if key in ('aAcc', 'aNll', 'aEce1', 'aEce2', 'aBrierScore', 'aCorrMaxprobU'):
                 summary_table_data.add_column(key, [val])
             else:
                 summary_table_data.add_column('m' + key, [val])
@@ -627,7 +637,7 @@ class CustomDataset(Dataset):
             print_log("No image w/ OOD objects or all images have just OOD objects", logger)
 
         for key, value in ret_metrics_summary.items():
-            if key in ('aAcc', 'aNll', 'aEce1', 'aEce2', 'aBrierScore'):
+            if key in ('aAcc', 'aNll', 'aEce1', 'aEce2', 'aBrierScore', 'aCorrMaxprobU'):
                 eval_results[key] = value
             else:
                 eval_results['m' + key] = value

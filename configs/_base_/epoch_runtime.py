@@ -2,10 +2,10 @@
 log_config = dict(
     interval=1,
     by_epoch=True,
-    hooks=[
-        dict(type='TextLoggerHook'),
-        dict(type='TensorboardLoggerHook')
-    ])
+    hooks=[dict(type='TextLoggerHook'),
+           dict(type='TensorboardLoggerHook')
+           ]
+)
 # yapf:enable
 dist_params = dict(backend='nccl')
 log_level = 'INFO'

@@ -2,6 +2,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from ..builder import LOSSES
+import torchmetrics
+from mmcv.utils import print_log
+EPS = 1e-10
 
 
 def relu_evidence(logits):
@@ -21,13 +24,6 @@ def softplus_evidence(logits):
     return F.softplus(logits)
 
 
-def loglikelihood_loss(y, alpha):
-    S = torch.sum(alpha, dim=1, keepdim=True)
-    loglikelihood_err = torch.sum((y - (alpha / S)) ** 2, dim=1, keepdim=True)
-    loglikelihood_var = torch.sum(alpha * (S - alpha) / (S * S * (S + 1)), dim=1, keepdim=True)
-    return loglikelihood_err, loglikelihood_var
-
-
 def mse_edl_loss(one_hot_gt, alpha, num_classes):
     strength = torch.sum(alpha, dim=1, keepdim=True)
     prob = alpha / strength
@@ -38,18 +34,21 @@ def mse_edl_loss(one_hot_gt, alpha, num_classes):
     # L_KL
     alpha_kl = (alpha - 1) * (1 - one_hot_gt) + 1
     C = KL(alpha_kl, num_classes)
+    # L_EUC
+    D, E = EUC(alpha, one_hot_gt, num_classes)
+    return A, B, C, D, E
 
-    return A, B, C
 
-
-def ce_edl_loss(one_hot_gt, alpha, num_classes, func, c):
+def ce_edl_loss(one_hot_gt, alpha, num_classes, func):
     strength = torch.sum(alpha, dim=1, keepdim=True)
     # L_err
-    A = torch.sum(one_hot_gt * (c * func(strength) - func(alpha)), axis=1, keepdims=True)
+    A = torch.sum(one_hot_gt * (func(strength) - func(alpha)), axis=1, keepdims=True)
     # L_kl
     alpha_kl = (alpha - 1) * (1 - one_hot_gt) + 1
     C = KL(alpha_kl, num_classes)
-    return A, C
+    # L_EUC
+    D, E = EUC(alpha, one_hot_gt, num_classes)
+    return A, C, D, E
 
 
 def KL(alpha, num_classes):
@@ -67,19 +66,43 @@ def KL(alpha, num_classes):
     return kl
 
 
+def EUC(alpha, one_hot_gt, num_classes):
+    strength = torch.sum(alpha, dim=1, keepdim=True)
+    u = num_classes / strength
+    _, target = torch.max(one_hot_gt, 1, keepdim=True)
+    max_prob, pred_cls = torch.max(alpha / strength, 1, keepdim=True)
+    # import ipdb; ipdb.set_trace()
+    accurate_match = torch.eq(pred_cls, target).float()
+    acc_uncertain = - max_prob * torch.log(1 - u + EPS)
+    inacc_certain = - (1 - max_prob) * torch.log(u + EPS)
+    return accurate_match * acc_uncertain, (1 - accurate_match) * inacc_certain
+
+
+def lam(epoch_num, total_epochs, annealing_start, annealing_step, annealing_method):
+    if annealing_method == 'step':
+        annealing_coef = torch.min(torch.tensor(1.0, dtype=torch.float32), torch.tensor(
+            epoch_num / annealing_step, dtype=torch.float32))
+    elif annealing_method == 'exp':
+        annealing_coef = annealing_start * torch.exp(-torch.log(annealing_start) / (total_epochs - 1) * epoch_num)
+    elif annealing_method == 'zero':
+        annealing_coef = torch.tensor(0., dtype=torch.float32)
+    else:
+        raise NotImplementedError
+    return annealing_coef
+
+
 @ LOSSES.register_module
 class EDLLoss(nn.Module):
 
-    def __init__(self, num_classes, loss_variant="mse", annealing_step=10, annealing_method="step", logit2evidence="exp", reduction="mean",
-                 loss_weight=1.0, avg_non_ignore=True, loss_name='loss_edl'):
+    def __init__(
+            self, num_classes, loss_variant="mse", annealing_step=10, annealing_method="step", annealing_from=1, total_epochs=70,
+            annealing_start=0.001, logit2evidence="exp", regularization="kld", reduction="mean", loss_weight=1.0, avg_non_ignore=True,
+            loss_name='loss_edl'):
         super(EDLLoss, self).__init__()
         self.reduction = reduction
         self.loss_weight = loss_weight
-        self.annealing_step = annealing_step
         self.num_classes = num_classes
         self.avg_non_ignore = avg_non_ignore
-        self.annealing_start = 0.01
-        self.annealing_method = annealing_method
         if logit2evidence == "exp":
             self.logit2evidence = exp_evidence
         elif logit2evidence == "softplus":
@@ -88,12 +111,27 @@ class EDLLoss(nn.Module):
             self.logit2evidence = relu_evidence
         else:
             raise KeyError(logit2evidence)
+        self.regularization = regularization
+        self.annealing_step = annealing_step
+        self.annealing_from = annealing_from
+        self.annealing_method = annealing_method
+        self.annealing_start = torch.tensor(annealing_start, dtype=torch.float32)
+
         self.epoch_num = 0
-        self.total_epochs = 70
+        self.total_epochs = total_epochs
+        self.lam_schedule = []
+        for epoch in range(self.total_epochs):
+            self.lam_schedule.append(lam(epoch, self.total_epochs, self.annealing_start, self.annealing_step, self.annealing_method))
+        if self.annealing_method != 'zero':
+            assert self.lam_schedule[-1].allclose(torch.tensor(1.)), "Please check you schedule!"
+
         self.loss_name = "_".join([loss_name, loss_variant])
+        # for logging
         self.last_A = 0
         self.last_B = 0
         self.last_C = 0
+        self.last_D = 0
+        self.last_E = 0
 
     def forward(self,
                 pred,
@@ -102,25 +140,46 @@ class EDLLoss(nn.Module):
                 avg_factor=None,
                 reduction_override=None,
                 ignore_index=255):
+        # print_log(f"Epoch ---> {self.epoch_num}/{self.total_epochs}")
         assert reduction_override in (None, 'none', 'mean', 'sum')
         reduction = (reduction_override if reduction_override else self.reduction)
         evidence = self.logit2evidence(pred)
-
         alpha = evidence + 1
         target_expanded = target.data.unsqueeze(1).clone()
         mask_ignore = (target_expanded == 255)
         target_expanded[mask_ignore] = 0
         one_hot_gt = torch.zeros_like(pred, dtype=torch.uint8).scatter_(1, target_expanded, 1)
-
         if self.loss_name.endswith("mse"):  # Eq. 5 MSE
-            A, B, C = mse_edl_loss(one_hot_gt, alpha, self.num_classes)
-            loss = A + B + self.lam * C
+            A, B, C, D, E = mse_edl_loss(one_hot_gt, alpha, self.num_classes)
+            if self.regularization == 'kld':
+                loss = A + B + self.lam_schedule[self.epoch_num] * C
+            elif self.regularization == 'euc':
+                # D: acc_uncertain, E: inacc_certain
+                loss = A + B + self.lam_schedule[self.epoch_num] * D + (1. - self.lam_schedule[self.epoch_num]) * E
+            elif self.regularization == 'none':
+                loss = A + B
+            else:
+                raise NotImplementedError
         elif self.loss_name.endswith("ce"):  # Eq. 4 CrossEntropy
-            A, C = ce_edl_loss(one_hot_gt, alpha, self.num_classes, func=torch.digamma, c=1.)  # self.epoch_num / self.total_epochs
-            loss = A + self.lam * C
+            A, C, D, E = ce_edl_loss(one_hot_gt, alpha, self.num_classes, func=torch.digamma)
+            if self.regularization == 'kld':
+                loss = A + self.lam_schedule[self.epoch_num] * C
+            elif self.regularization == 'euc':
+                # D: acc_uncertain, E: inacc_certain
+                loss = A + self.lam_schedule[self.epoch_num] * D + (1. - self.lam_schedule[self.epoch_num]) * E
+            elif self.regularization == 'none':
+                loss = A
+            else:
+                raise NotImplementedError
         elif self.loss_name.endswith("mll"):  # Eq. 3 Maximum Likelihood Type II
-            A, C = ce_edl_loss(one_hot_gt, alpha, self.num_classes, func=torch.log, c=1.)  # self.epoch_num / self.total_epochs
-            loss = A + self.lam * C
+            A, C, D, E = ce_edl_loss(one_hot_gt, alpha, self.num_classes, func=torch.log)
+            if self.regularization == 'kld':
+                loss = A + self.lam_schedule[self.epoch_num] * C
+            elif self.regularization == 'euc':
+                # D: acc_uncertain, E: inacc_certain
+                loss = A + self.lam_schedule[self.epoch_num] * D + (1. - self.lam_schedule[self.epoch_num]) * E
+            elif self.regularization == 'none':
+                loss = A
         else:
             raise NotImplementedError
 
@@ -139,6 +198,11 @@ class EDLLoss(nn.Module):
         self.last_A = torch.where(mask_ignore, torch.zeros_like(self.last_A), self.last_A).sum() / avg_factor
         self.last_C = C.detach()
         self.last_C = torch.where(mask_ignore, torch.zeros_like(self.last_C), self.last_C).sum() / avg_factor
+        self.last_D = D.detach()
+        self.last_D = torch.where(mask_ignore, torch.zeros_like(self.last_D), self.last_D).sum() / avg_factor
+        self.last_E = E.detach()
+        self.last_E = torch.where(mask_ignore, torch.zeros_like(self.last_E), self.last_E).sum() / avg_factor
+
         if self.loss_name.endswith("mse"):
             self.last_B = B.detach()
             self.last_B = torch.where(mask_ignore, torch.zeros_like(self.last_B), self.last_B).sum() / avg_factor
@@ -156,47 +220,46 @@ class EDLLoss(nn.Module):
         strength = alpha.sum(dim=1, keepdim=True)
         u = self.num_classes / strength
         prob = alpha / strength
+        var = torch.sum(alpha * (strength - alpha) / (strength * strength * (strength + 1)), dim=1)
         max_prob, pred_cls = torch.max(prob.data.clone(), dim=1, keepdim=True)
         gt_cls = target.data.unsqueeze(1).clone()
         mask_ignore = (gt_cls == ignore_index)
         succ = torch.logical_and((pred_cls == gt_cls), ~mask_ignore)
         fail = torch.logical_and(~(pred_cls == gt_cls), ~mask_ignore)
         logs["mean_evidence"] = evidence.sum(dim=1, keepdim=True).mean()
-        logs["mean_fail_evidence"] = (evidence.sum(dim=1, keepdim=True) * fail).sum() / (fail.sum() + 1e-20)
-        logs["mean_succ_evidence"] = (evidence.sum(dim=1, keepdim=True) * succ).sum() / (succ.sum() + 1e-20)
+        logs["mean_fail_evidence"] = (evidence.sum(dim=1, keepdim=True) * fail).sum() / (fail.sum() + EPS)
+        logs["mean_succ_evidence"] = (evidence.sum(dim=1, keepdim=True) * succ).sum() / (succ.sum() + EPS)
         logs["mean_L_err"] = self.last_A
         if self.loss_name.endswith("mse"):
             logs["mean_L_var"] = self.last_B
         logs["mean_L_kl"] = self.last_C
-        logs["lam"] = self.lam
-        logs["avg_max_prob"] = (max_prob * ~mask_ignore).sum() / ((~mask_ignore).sum() + 1e-20)
-        logs["avg_uncertainty"] = (u * ~mask_ignore).sum() / ((~mask_ignore).sum() + 1e-20)
+        logs["mean_acc_uncertain"] = self.last_D
+        logs["mean_inacc_certain"] = self.last_E
+
+        logs["lam"] = self.lam_schedule[self.epoch_num]
+        logs["avg_max_prob"] = (max_prob * ~mask_ignore).sum() / ((~mask_ignore).sum() + EPS)
+        logs["avg_uncertainty"] = (u * ~mask_ignore).sum() / ((~mask_ignore).sum() + EPS)
         logs["acc_seg"] = succ.sum() / (fail.sum() + succ.sum()) * 100
 
+        max_prob_flat = max_prob.permute(1, 0, 2, 3).flatten(1, -1).squeeze()
+        u_flat = u.permute(1, 0, 2, 3).flatten(1, -1).squeeze()
+        logs["avg_max_prob_u_corr"] = torchmetrics.functional.pearson_corrcoef(max_prob_flat, u_flat)
         return logs
 
-    @ property
-    def lam(self):
-        # annealing coefficient
-        if self.annealing_method == 'step':
-            annealing_coef = torch.min(torch.tensor(1.0, dtype=torch.float32), torch.tensor(
-                self.epoch_num / self.annealing_step, dtype=torch.float32))
-        elif self.annealing_method == 'exp':
-            annealing_start = torch.tensor(self.annealing_start, dtype=torch.float32)
-            annealing_coef = annealing_start * torch.exp(-torch.log(annealing_start) / self.total_epoch * self.epoch_num)
-        elif self.annealing_method == 'stairs':
-            annealing_coef = torch.tensor(0.1 * (self.epoch_num // 5), dtype=torch.float32)
-        elif self.annealing_method == 'zero':
-            annealing_coef = torch.tensor(0., dtype=torch.float32)
-        else:
-            raise NotImplementedError
-        return annealing_coef
-
-    def get_probs(self, pred):
-        pred_detached = pred.detach()
-        evidence = self.logit2evidence(pred_detached)
-        alpha = evidence + 1
-        strength = alpha.sum(dim=1, keepdim=True)
-        u = self.num_classes / strength
-        prob = alpha / strength
-        return prob, u
+    # @ property
+    # def lam(self):
+    #     if self.annealing_method == 'step':
+    #         annealing_coef = torch.min(torch.tensor(1.0, dtype=torch.float32), torch.tensor(
+    #             self.epoch_num / self.annealing_step, dtype=torch.float32))
+    #     elif self.annealing_method == 'exp':
+    #         # if self.epoch_num + 1 < self.annealing_from:
+    #         #     annealing_coef = torch.tensor(0.)
+    #         # else:
+    #         #     annealing_coef = self.annealing_start * torch.exp(-torch.log(self.annealing_start) / (
+    #         #         self.total_epochs - self.annealing_from) * (self.epoch_num + 1 - self.annealing_from))
+    #         annealing_coef = self.annealing_start * torch.exp(-torch.log(self.annealing_start) / (self.total_epochs - 1) * self.epoch_num)
+    #     elif self.annealing_method == 'zero':
+    #         annealing_coef = torch.tensor(0., dtype=torch.float32)
+    #     else:
+    #         raise NotImplementedError
+    #     return annealing_coef

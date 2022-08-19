@@ -20,7 +20,7 @@ from mmseg.datasets import build_dataloader, build_dataset
 from mmseg.models import build_segmentor
 from mmseg.utils import build_ddp, build_dp, get_device, setup_multi_processes
 from torch.utils.tensorboard import SummaryWriter
-
+import shutil
 import json
 import re
 
@@ -128,7 +128,6 @@ def parse_args():
 
 def main():
     import warnings; warnings.filterwarnings("ignore")
-    import ipdb; ipdb.set_trace()
     args = parse_args()
     assert args.out or args.eval or args.format_only or args.show \
         or args.show_dir, \
@@ -230,16 +229,19 @@ def main():
     # build the dataloader
     data_loader = build_dataloader(dataset, **test_loader_cfg)
     all_checkpoints = [os.path.join(args.work_dir, file) for file in os.listdir(args.work_dir) if file.endswith(".pth") and file != "latest.pth"]
-    all_checkpoints.sort(key=lambda file: int(re.search(r"(?:epoch)_([0-9]+).(?:pth)$", file).groups()[0]))
-    all_checkpoints_iter = [int(re.search(r"(?:epoch)_([0-9]+).(?:pth)$", file).groups()[0]) for file in all_checkpoints]
-    ood_summary = pd.DataFrame(columns=["epoch", 'max_prob.auroc', 'max_prob.aupr', 'max_prob.fpr95', 'max_logit.auroc',
-                               'max_logit.aupr', 'max_logit.fpr95', 'entropy.auroc', 'entropy.aupr', 'entropy.fpr95'])
+    all_checkpoints.sort(key=lambda file: int(re.search(r"(?:epoch)_([0-9]+).(?:pth)$", osp.basename(file)).groups()[0]))
+    all_checkpoints_iter = [int(re.search(r"(?:epoch)_([0-9]+).(?:pth)$", osp.basename(file)).groups()[0]) for file in all_checkpoints]
+    ood_summary = pd.DataFrame(columns=["epoch", 'max_prob.auroc', 'max_prob.aupr', 'max_prob.fpr95', 'u.auroc', 'u.aupr',
+                               'u.fpr95', 'max_logit.auroc', 'max_logit.aupr', 'max_logit.fpr95', 'entropy.auroc', 'entropy.aupr', 'entropy.fpr95'])
 
     if not args.all:
         index_last = max(range(len(all_checkpoints_iter)), key=all_checkpoints_iter.__getitem__)
         all_checkpoints = [all_checkpoints[index_last]]
         all_checkpoints_iter = [all_checkpoints_iter[index_last]]
     if args.all:
+        # clean previous test logs
+        if osp.exists(os.path.join(args.work_dir, "tf_logs_test")):
+            shutil.rmtree(os.path.join(args.work_dir, "tf_logs_test"))
         writer = SummaryWriter(log_dir=os.path.join(args.work_dir, "tf_logs_test"))
     ans = []
 
@@ -387,6 +389,9 @@ def main():
                           round(float(metric_dict["metric"]['max_prob.auroc']), 2),
                           round(float(metric_dict["metric"]['max_prob.aupr']), 2),
                           round(float(metric_dict["metric"]['max_prob.fpr95']), 2),
+                          round(float(metric_dict["metric"]['u.auroc']), 2),
+                          round(float(metric_dict["metric"]['u.aupr']), 2),
+                          round(float(metric_dict["metric"]['u.fpr95']), 2),
                           round(float(metric_dict["metric"]['max_logit.auroc']), 2),
                           round(float(metric_dict["metric"]['max_logit.aupr']), 2),
                           round(float(metric_dict["metric"]['max_logit.fpr95']), 2),
@@ -397,6 +402,9 @@ def main():
                              'max_prob.auroc',
                              'max_prob.aupr',
                              'max_prob.fpr95',
+                             'u.auroc',
+                             'u.aupr',
+                             'u.fpr95',
                              'max_logit.auroc',
                              'max_logit.aupr',
                              'max_logit.fpr95',
@@ -408,7 +416,7 @@ def main():
                 metric_dict["iter"] = all_checkpoints_iter[i]
 
                 curr_res = {}
-                for a in ("max_prob", "max_logit", "entropy"):
+                for a in ("max_prob", "u", "max_logit", "entropy"):
                     for b in ("auroc", "aupr", "fpr95"):
                         curr_res[f"{a}.{b}"] = float(metric_dict['metric'][f"{a}.{b}"])
                 curr_res["mIoU"] = float(metric_dict['metric']["mIoU"])

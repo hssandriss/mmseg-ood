@@ -154,7 +154,6 @@ def single_gpu_test(model,
                         alpha = seg_evidence + 1
                         probs = alpha / alpha.sum(dim=1, keepdim=True)
                         u = num_cls / alpha.sum(dim=1, keepdim=True)
-                        # import ipdb; ipdb.set_trace()
                         plot_conf(1 - u.cpu().numpy(), out_file[: -4] + "_edl_1_minus_u" + out_file[-4:])
                         plot_conf(probs.max(dim=1)[0].cpu().numpy(), out_file[: -4] + "_edl_conf" + out_file[-4:])
                     else:
