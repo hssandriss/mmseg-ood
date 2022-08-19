@@ -147,7 +147,6 @@ class LoggerHook_(Hook):
 
     def after_train_epoch(self, runner) -> None:
         if self.by_epoch and self.every_n_epochs(runner, self.interval):
-            import ipdb; ipdb.set_trace()
             runner.log_buffer.average()
         if runner.log_buffer.ready:
             self.log(runner)

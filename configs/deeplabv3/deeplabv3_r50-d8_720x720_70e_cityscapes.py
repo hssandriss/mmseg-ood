@@ -9,5 +9,5 @@ model = dict(
     # test_cfg=dict(mode='slide', crop_size=(720, 720), stride=(513, 513)),
 
 )
-data = dict(samples_per_gpu=4,
-            workers_per_gpu=4)
+data = dict(samples_per_gpu=3,
+            workers_per_gpu=3)

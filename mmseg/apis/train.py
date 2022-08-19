@@ -140,14 +140,20 @@ def train_segmentor(model,
             meta=meta))
 
     # register hooks
-    runner.register_training_hooks(cfg.lr_config, cfg.optimizer_config,
-                                   cfg.checkpoint_config,  # cfg.log_config,
-                                   cfg.get('momentum_config', None))
+    epoch_logger = True if 'by_epoch' in cfg.log_config.keys() and cfg.log_config.get("by_epoch") else False
+    if epoch_logger:
+        runner.register_training_hooks(cfg.lr_config, cfg.optimizer_config,
+                                       cfg.checkpoint_config,  # cfg.log_config,
+                                       cfg.get('momentum_config', None))
+
+        runner.register_hook(TextLoggerHook_(**{k: v for k, v in cfg.log_config.items() if k != 'hooks'}))
+        runner.register_hook(TensorboardLoggerHook_(**{k: v for k, v in cfg.log_config.items() if k != 'hooks'}))
+    else:
+        runner.register_training_hooks(cfg.lr_config, cfg.optimizer_config,
+                                       cfg.checkpoint_config, cfg.log_config,
+                                       cfg.get('momentum_config', None))
 
     runner.register_hook(ParseEpochToLossHook(), priority='NORMAL')
-    runner.register_hook(TextLoggerHook_(**{k: v for k, v in cfg.log_config.items() if k != 'hooks'}))
-    runner.register_hook(TensorboardLoggerHook_(**{k: v for k, v in cfg.log_config.items() if k != 'hooks'}))
-    # import ipdb; ipdb.set_trace()
     if distributed:
         # when distributed training by epoch, using`DistSamplerSeedHook` to set
         # the different seed to distributed sampler for each epoch, it will

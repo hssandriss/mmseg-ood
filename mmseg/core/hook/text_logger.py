@@ -95,7 +95,7 @@ class TextLoggerHook_(LoggerHook_):
             basename = osp.basename(runner.work_dir.rstrip(osp.sep))
             self.out_dir = self.file_client.join_path(self.out_dir, basename)
             runner.logger.info(f'Text logs will be saved to {self.out_dir} by {self.file_client.name} after the training process.')
-
+        self.start_epoch = runner.epoch
         self.start_iter = runner.iter
         self.json_log_path = osp.join(runner.work_dir, f'{runner.timestamp}.log.json')
         if runner.meta is not None:
@@ -115,8 +115,9 @@ class TextLoggerHook_(LoggerHook_):
         if runner.meta is not None and 'exp_name' in runner.meta:
             if (self.every_n_iters(runner, self.interval_exp_name)) or (self.by_epoch and self.end_of_epoch(runner)):
                 exp_info = f'Exp name: {runner.meta["exp_name"]}'
+                exp_dir = f'Logging dir: {osp.basename(runner.work_dir)}'
                 runner.logger.info(exp_info)
-
+                runner.logger.info(exp_dir)
         if log_dict['mode'] == 'train':
             if isinstance(log_dict['lr'], dict):
                 lr_str = []
@@ -133,9 +134,8 @@ class TextLoggerHook_(LoggerHook_):
             else:
                 log_str = f'Iter [{log_dict["iter"]}/{runner.max_iters}]\t'
             log_str += f'{lr_str}, '
-
             if 'time' in log_dict.keys():
-                self.time_sec_tot += (log_dict['time'] * self.interval)
+                self.time_sec_tot += (log_dict['time'] * runner.iter / (runner.epoch + 1))
                 time_sec_avg = self.time_sec_tot / (runner.iter - self.start_iter + 1)
                 eta_sec = time_sec_avg * (runner.max_iters - runner.iter - 1)
                 eta_str = str(datetime.timedelta(seconds=int(eta_sec)))
