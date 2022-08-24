@@ -96,6 +96,7 @@ class CustomDataset(Dataset):
                  palette=None,
                  gt_seg_map_loader_cfg=dict(),
                  file_client_args=dict(backend='disk')):
+        self.mixed = False
         self.pipeline = Compose(pipeline)
         self.img_dir = img_dir
         self.img_suffix = img_suffix
@@ -298,7 +299,7 @@ class CustomDataset(Dataset):
 
         if not use_bags:
             if logit2prob == "edl":
-                alpha = seg_logit_flat + 1
+                alpha = seg_logit_flat
                 strength = alpha.sum(dim=1, keepdim=True)
                 u = num_cls / strength
                 probs = alpha / strength
@@ -371,7 +372,7 @@ class CustomDataset(Dataset):
             ood_metrics = (np.array([0. for _ in range(13)]), False)
 
         # Calibration/Confidence metrics for closed set
-        if not hasattr(self, "ood_indices"):
+        if not hasattr(self, "ood_indices") or self.mixed:
             if self.ignore_index:
                 seg_gt_tensor_flat_no_bg = seg_gt_tensor_flat[~ignore_bg_mask]
                 probs_no_bg = probs[~ignore_bg_mask, :]

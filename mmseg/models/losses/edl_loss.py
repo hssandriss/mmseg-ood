@@ -96,7 +96,7 @@ class EDLLoss(nn.Module):
 
     def __init__(
             self, num_classes, loss_variant="mse", annealing_step=10, annealing_method="step", annealing_from=1, total_epochs=70,
-            annealing_start=0.001, logit2evidence="exp", regularization="kld", reduction="mean", loss_weight=1.0, avg_non_ignore=True,
+            annealing_start=0.001, logit2evidence="exp", regularization="kld", reduction="mean", loss_weight=1.0, pow_alpha=True, avg_non_ignore=True,
             loss_name='loss_edl'):
         super(EDLLoss, self).__init__()
         self.reduction = reduction
@@ -124,7 +124,7 @@ class EDLLoss(nn.Module):
             self.lam_schedule.append(lam(epoch, self.total_epochs, self.annealing_start, self.annealing_step, self.annealing_method))
         if self.annealing_method != 'zero':
             assert self.lam_schedule[-1].allclose(torch.tensor(1.)), "Please check you schedule!"
-
+        self.pow_alpha = pow_alpha
         self.loss_name = "_".join([loss_name, loss_variant])
         # for logging
         self.last_A = 0
@@ -144,7 +144,7 @@ class EDLLoss(nn.Module):
         assert reduction_override in (None, 'none', 'mean', 'sum')
         reduction = (reduction_override if reduction_override else self.reduction)
         evidence = self.logit2evidence(pred)
-        alpha = evidence + 1
+        alpha = (evidence + 1)**2 if self.pow_alpha else evidence + 1
         target_expanded = target.data.unsqueeze(1).clone()
         mask_ignore = (target_expanded == 255)
         target_expanded[mask_ignore] = 0
@@ -216,7 +216,7 @@ class EDLLoss(nn.Module):
         logs = {}
         pred_detached = pred.detach()
         evidence = self.logit2evidence(pred_detached)
-        alpha = evidence + 1
+        alpha = (evidence + 1)**2 if self.pow_alpha else evidence + 1
         strength = alpha.sum(dim=1, keepdim=True)
         u = self.num_classes / strength
         prob = alpha / strength

@@ -64,6 +64,7 @@ class StreetHazardsDataset(CustomDataset):
         self.custom_classes = True
         self.label_map = {1: 0, 2: 1, 3: 2, 4: 3, 5: 4, 6: 5, 7: 6, 8: 7, 9: 8, 10: 9, 11: 10, 12: 11, 13: 12, 14: 13}
         self.ood_indices = [12]
+        self.mixed = True
         self.num_classes = 12
 
     def evaluate_ood(self, out_scores, in_scores) -> Tuple[np.float64, np.float64, np.float64]:
