@@ -116,6 +116,9 @@ def train_segmentor(model,
                 'Please use MMCV >= 1.4.4 for CPU training!'
         model = build_dp(model, cfg.device, device_ids=cfg.gpu_ids)
 
+    import ipdb; ipdb.set_trace()
+    # check model
+
     # build runner
     optimizer = build_optimizer(model, cfg.optimizer)
 
