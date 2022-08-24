@@ -6,6 +6,7 @@ from mmcv.cnn import ConvModule
 from mmseg.ops import resize
 from ..builder import HEADS
 from .decode_head import BaseDecodeHead
+from .nf_bll_decode_head import NfBllBaseDecodeHead
 
 
 class ASPPModule(nn.ModuleList):
@@ -122,3 +123,81 @@ class ASPPHead(BaseDecodeHead):
             assert output.is_leaf
         output = self.cls_seg(output)
         return output
+
+
+@HEADS.register_module()
+class ASPPNfBllHead(NfBllBaseDecodeHead):
+    """Rethinking Atrous Convolution for Semantic Image Segmentation.
+
+    This head is the implementation of `DeepLabV3
+    <https://arxiv.org/abs/1706.05587>`_.
+
+    Args:
+        dilations (tuple[int]): Dilation rates for ASPP module.
+            Default: (1, 6, 12, 18).
+    """
+
+    def __init__(self, dilations=(1, 6, 12, 18), **kwargs):
+        super(ASPPNfBllHead, self).__init__(**kwargs)
+        assert isinstance(dilations, (list, tuple))
+        self.dilations = dilations
+        self.image_pool = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            ConvModule(
+                self.in_channels,
+                self.channels,
+                1,
+                conv_cfg=self.conv_cfg,
+                norm_cfg=self.norm_cfg,
+                act_cfg=self.act_cfg))
+        self.aspp_modules = ASPPModule(
+            dilations,
+            self.in_channels,
+            self.channels,
+            conv_cfg=self.conv_cfg,
+            norm_cfg=self.norm_cfg,
+            act_cfg=self.act_cfg)
+        self.bottleneck = ConvModule(
+            (len(dilations) + 1) * self.channels,
+            self.channels,
+            3,
+            padding=1,
+            conv_cfg=self.conv_cfg,
+            norm_cfg=self.norm_cfg,
+            act_cfg=self.act_cfg)
+
+    def _forward_feature(self, inputs):
+        """Forward function for feature maps before classifying each pixel with
+        ``self.cls_seg`` fc.
+
+        Args:
+            inputs (list[Tensor]): List of multi-level img features.
+
+        Returns:
+            feats (Tensor): A tensor of shape (batch_size, self.channels,
+                H, W) which is feature map for last layer of decoder head.
+        """
+        x = self._transform_inputs(inputs)
+        aspp_outs = [
+            resize(
+                self.image_pool(x),
+                size=x.size()[2:],
+                mode='bilinear',
+                align_corners=self.align_corners)
+        ]
+        aspp_outs.extend(self.aspp_modules(x))
+        aspp_outs = torch.cat(aspp_outs, dim=1)
+        feats = self.bottleneck(aspp_outs)
+        return feats
+
+    def forward(self, inputs, nsamples):
+        """Forward function."""
+        with torch.no_grad():
+            output = self._forward_feature(inputs)
+        assert output.is_leaf, "you are backpropagating on feature extractor!"
+        z0 = self.density_estimation.sample_base(nsamples)
+        z, sum_log_jacobians = self.density_estimation.forward(z0)
+
+        import ipdb; ipdb.set_trace()
+        output = self.cls_seg(output, z)
+        return output, sum_log_jacobians
