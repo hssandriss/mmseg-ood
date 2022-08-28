@@ -12,16 +12,23 @@ def relu_evidence(logits):
     return F.relu(logits)
 
 
+def sigmoid_evidence(logits):
+    # This function to generate evidence is used for the first example
+    max_evidence = 1e4
+    # max_evidence = 10.
+    return torch.sigmoid(logits) * max_evidence
+
+
 def exp_evidence(logits):
     # This one usually works better and used for the second and third examples
     # For general settings and different datasets, you may try this one first
-    return torch.exp(torch.clamp(logits, -10, 10))
+    return torch.exp(torch.clamp(logits, -50, 50))
 
 
 def softplus_evidence(logits):
     # This one is another alternative and
     # usually behaves better than the relu_evidence
-    return F.softplus(logits)
+    return F.softplus(logits, beta=0.1)
 
 
 def mse_edl_loss(one_hot_gt, alpha, num_classes):
@@ -71,7 +78,7 @@ def EUC(alpha, one_hot_gt, num_classes):
     u = num_classes / strength
     _, target = torch.max(one_hot_gt, 1, keepdim=True)
     max_prob, pred_cls = torch.max(alpha / strength, 1, keepdim=True)
-    # import ipdb; ipdb.set_trace()
+
     accurate_match = torch.eq(pred_cls, target).float()
     acc_uncertain = - max_prob * torch.log(1 - u + EPS)
     inacc_certain = - (1 - max_prob) * torch.log(u + EPS)
@@ -94,10 +101,9 @@ def lam(epoch_num, total_epochs, annealing_start, annealing_step, annealing_meth
 @ LOSSES.register_module
 class EDLLoss(nn.Module):
 
-    def __init__(
-            self, num_classes, loss_variant="mse", annealing_step=10, annealing_method="step", annealing_from=1, total_epochs=70,
-            annealing_start=0.001, logit2evidence="exp", regularization="kld", reduction="mean", loss_weight=1.0, pow_alpha=True, avg_non_ignore=True,
-            loss_name='loss_edl'):
+    def __init__(self, num_classes, loss_variant="mse", annealing_step=10, annealing_method="step", annealing_from=1, total_epochs=70,
+                 annealing_start=0.001, logit2evidence="exp", regularization="kld", reduction="mean", loss_weight=1.0, pow_alpha=False,
+                 avg_non_ignore=True, loss_name='loss_edl'):
         super(EDLLoss, self).__init__()
         self.reduction = reduction
         self.loss_weight = loss_weight
@@ -109,6 +115,10 @@ class EDLLoss(nn.Module):
             self.logit2evidence = softplus_evidence
         elif logit2evidence == "relu":
             self.logit2evidence = relu_evidence
+        elif logit2evidence == "sig":
+            self.logit2evidence = sigmoid_evidence
+        # elif logit2evidence == "tanh":
+        #     self.logit2evidence = tanh_evidence
         else:
             raise KeyError(logit2evidence)
         self.regularization = regularization
@@ -226,9 +236,21 @@ class EDLLoss(nn.Module):
         mask_ignore = (gt_cls == ignore_index)
         succ = torch.logical_and((pred_cls == gt_cls), ~mask_ignore)
         fail = torch.logical_and(~(pred_cls == gt_cls), ~mask_ignore)
-        logs["mean_evidence"] = evidence.sum(dim=1, keepdim=True).mean()
-        logs["mean_fail_evidence"] = (evidence.sum(dim=1, keepdim=True) * fail).sum() / (fail.sum() + EPS)
-        logs["mean_succ_evidence"] = (evidence.sum(dim=1, keepdim=True) * succ).sum() / (succ.sum() + EPS)
+        logs["mean_ev_sum"] = evidence.sum(dim=1, keepdim=True).mean()
+        logs["mean_fail_ev_sum"] = (evidence.sum(dim=1, keepdim=True) * fail).sum() / (fail.sum() + EPS)
+        logs["mean_succ_ev_sum"] = (evidence.sum(dim=1, keepdim=True) * succ).sum() / (succ.sum() + EPS)
+        # import ipdb; ipdb.set_trace()
+        gt_cls_ = gt_cls.clone()
+        gt_cls_[mask_ignore] = 0
+        cls_ev = evidence.gather(1, gt_cls_)
+        for c in range(self.num_classes):
+            mask_cls = torch.logical_and(gt_cls == c, ~mask_ignore)
+            if mask_cls.any():
+                logs[f"mean_target_cls_{c}_ev"] = cls_ev[mask_cls].mean()
+            else:
+                logs[f"mean_target_cls_{c}_ev"] = torch.tensor(0.)
+        logs["mean_max_ev"] = evidence.max(dim=1, keepdim=True)[0].mean()
+
         logs["mean_L_err"] = self.last_A
         if self.loss_name.endswith("mse"):
             logs["mean_L_var"] = self.last_B
