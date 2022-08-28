@@ -15,7 +15,10 @@ def relu_evidence(logits):
 def exp_evidence(logits):
     # This one usually works better and used for the second and third examples
     # For general settings and different datasets, you may try this one first
-    return torch.exp(torch.clamp(logits, -10, 10))
+    b = logits.max().detach()
+    if b > torch.tensor(torch.finfo(torch.float32).max).log():  # 88.72
+        import ipdb; ipdb.set_trace()
+    return torch.exp(logits - b) * torch.exp(b)
 
 
 def softplus_evidence(logits):
