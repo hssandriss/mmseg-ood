@@ -22,7 +22,12 @@ def sigmoid_evidence(logits):
 def exp_evidence(logits):
     # This one usually works better and used for the second and third examples
     # For general settings and different datasets, you may try this one first
-    return torch.exp(torch.clamp(logits, -50, 50))
+    # b = torch.tensor(20)
+    b = logits.max().detach()
+
+    return torch.exp(logits - b) * torch.exp(b)
+
+    # return torch.exp(torch.clamp(logits, -50, 50))
 
 
 def softplus_evidence(logits):
