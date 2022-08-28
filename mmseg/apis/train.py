@@ -116,11 +116,11 @@ def train_segmentor(model,
                 'Please use MMCV >= 1.4.4 for CPU training!'
         model = build_dp(model, cfg.device, device_ids=cfg.gpu_ids)
 
-    import ipdb; ipdb.set_trace()
-    # check model
-
     # build runner
-    optimizer = build_optimizer(model, cfg.optimizer)
+    optim_type = cfg.optimizer.pop('type')
+    assert optim_type == 'SGD', "currently just is supported"
+    optimizer = torch.optim.SGD(params=[p for name, p in model.named_parameters() if "density_estimation" in name], **cfg.optimizer)
+    # optimizer = build_optimizer(model, cfg.optimizer)
 
     if cfg.get('runner') is None:
         cfg.runner = {'type': 'IterBasedRunner', 'max_iters': cfg.total_iters}
@@ -204,7 +204,7 @@ def train_segmentor(model,
             priority = hook_cfg.pop('priority', 'NORMAL')
             hook = build_from_cfg(hook_cfg, HOOKS)
             runner.register_hook(hook, priority=priority)
-
+    assert cfg.load_from, "It is required to pre-learned features"
     if cfg.resume_from is None and cfg.get('auto_resume'):
         resume_from = find_latest_checkpoint(cfg.work_dir)
         if resume_from is not None:
@@ -216,27 +216,8 @@ def train_segmentor(model,
         else:
             runner.resume(cfg.resume_from)
     elif cfg.load_from:
-
-        if freeze_encoder and init_not_frozen:
-            ckpt = torch.load(cfg.load_from)
-            to_keep = [k for k in ckpt["state_dict"].keys() if k.startswith('backbone')]
-            to_delete = [k for k in ckpt["state_dict"].keys() if not k.startswith('backbone')]
-            for k in to_delete:
-                del ckpt["state_dict"][k]
-            cfg.load_from = os.path.join(cfg.work_dir, "src.pth")
-            torch.save(ckpt, cfg.load_from)
-        if freeze_features and init_not_frozen:
-            ckpt = torch.load(cfg.load_from)
-            to_delete = [k for k in ckpt["state_dict"].keys() if k.startswith("decode_head.conv_seg")]
-            to_keep = [k for k in ckpt["state_dict"].keys() if not k.startswith('decode_head.conv_seg')]
-            for k in to_delete:
-                del ckpt["state_dict"][k]
-            cfg.load_from = os.path.join(cfg.work_dir, "src.pth")
-            torch.save(ckpt, cfg.load_from)
         runner.load_checkpoint(cfg.load_from)
-    if freeze_features:
-        model.module.freeze_feature_extractor()
-    if freeze_encoder:
-        model.module.freeze_encoder()
-
+        runner.model.module.freeze_encoder()
+        runner.model.module.freeze_feature_extractor()
+        runner.model.module.decode_head.update_z0_params()
     runner.run(data_loaders, cfg.workflow)
