@@ -24,7 +24,7 @@ def exp_evidence(logits):
     # For general settings and different datasets, you may try this one first
     # b = torch.tensor(20)
     b = logits.max().detach()
-    if b > np.log(torch.finfo(torch.float32).max):
+    if b > torch.tensor(torch.finfo(torch.float32).max).log(): # 88.72
         import ipdb; ipdb.set_trace()
     return torch.exp(logits - b) * torch.exp(b)
     # return torch.exp(torch.clamp(logits, -50, 50))
