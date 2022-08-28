@@ -103,12 +103,36 @@ def single_gpu_test(model,
     # data_fetcher -> collate_fn(dataset[index]) -> data_sample
     # we use batch_sampler to get correct data idx
     loader_indices = data_loader.batch_sampler
+
+    # lsaturated_dict = {k: 0 for k in dataset.CLASSES}
+    # rsaturated_dict = {k: 0 for k in dataset.CLASSES}
+    # saturated_dict = {k: 0 for k in dataset.CLASSES}
+
     for batch_indices, data in zip(loader_indices, data_loader):
         with torch.no_grad():
             result, seg_logit = model(return_loss=False, **data)  # returns labels and logits
 
         seg_logit = seg_logit.detach()
         seg_gt = dataset.get_gt_seg_map_by_idx_and_reduce_zero_label(batch_indices[0])
+
+        # lsaturated = seg_logit.lt(-10.)
+        # rsaturated = seg_logit.gt(10.)
+        # saturated = torch.logical_or(lsaturated, rsaturated)
+        # if saturated.any():
+        #     classes, count = np.unique(seg_gt[saturated.any(1).squeeze().cpu().numpy()], return_counts=True)
+        #     for c, cc in zip(classes, count):
+        #         if c != 255:
+        #             saturated_dict[dataset.CLASSES[c]] += cc
+        # if lsaturated.any():
+        #     lclasses, lcount = np.unique(seg_gt[lsaturated.any(1).squeeze().cpu().numpy()], return_counts=True)
+        #     for c, cc in zip(lclasses, lcount):
+        #         if c != 255:
+        #             lsaturated_dict[dataset.CLASSES[c]] += cc
+        # if rsaturated.any():
+        #     rclasses, rcount = np.unique(seg_gt[rsaturated.any(1).squeeze().cpu().numpy()], return_counts=True)
+        #     for c, cc in zip(rclasses, rcount):
+        #         if c != 255:
+        #             rsaturated_dict[dataset.CLASSES[c]] += cc
 
         if (show or out_dir):
             # produce 3 images
@@ -198,6 +222,7 @@ def single_gpu_test(model,
         batch_size = len(result)
         for _ in range(batch_size):
             prog_bar.update()
+
     return results
 
 
