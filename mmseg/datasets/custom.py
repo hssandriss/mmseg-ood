@@ -378,6 +378,12 @@ class CustomDataset(Dataset):
                 seg_gt_tensor_flat_no_bg = seg_gt_tensor_flat[~ignore_bg_mask]
                 probs_no_bg = probs[~ignore_bg_mask, :]
 
+            if hasattr(self, "ood_indices"):
+                # import ipdb; ipdb.set_trace()
+                ood_masker = self.get_ood_masker(seg_gt_tensor_flat_no_bg)
+                # import ipdb; ipdb.set_trace()
+                probs_no_bg = probs_no_bg[ood_masker]
+                seg_gt_tensor_flat_no_bg = seg_gt_tensor_flat_no_bg[ood_masker]
             nll = F.nll_loss(probs_no_bg.log(), seg_gt_tensor_flat_no_bg, reduction='mean').item()
             ece_l1 = calibration_error(probs_no_bg, seg_gt_tensor_flat_no_bg, norm='l1', ).item()
             ece_l2 = calibration_error(probs_no_bg, seg_gt_tensor_flat_no_bg, norm='l2').item()

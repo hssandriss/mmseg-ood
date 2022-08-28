@@ -68,39 +68,36 @@ class StreetHazardsDataset(CustomDataset):
         self.num_classes = 12
 
     def evaluate_ood(self, out_scores, in_scores) -> Tuple[np.float64, np.float64, np.float64]:
-        if (len(out_scores) != 0) and (len(in_scores) != 0):
-            auroc, apr, fpr, ece = get_ood_measures(out_scores, in_scores)
-            return auroc, apr, fpr, ece
-        else:
-            return None, None, None, None
+        auroc, apr, fpr = get_ood_measures(out_scores, in_scores)
+        return auroc, apr, fpr
 
-    def get_in_out_conf(self, pred_confs, seg_gt):
-        in_scores = {}
-        out_scores = {}
+    def get_in_out_conf(self, pred_confs, seg_gt, conf_type):
+        assert conf_type in ("max_prob", "max_logit", "entropy", "u")
         confs = deepcopy(pred_confs)
-        # if self.reduce_zero_label:
-        #     seg_gt[seg_gt == 0] = 255
-        #     seg_gt = seg_gt - 1
-        #     seg_gt[seg_gt == 254] = 255
         # Mask ignored index
+
         mask = (seg_gt != self.ignore_index)
+
         seg_gt = seg_gt[mask]
+        confs = confs.squeeze()[mask]
+
         # Find out which pixels are OOD and which are not
         out_index = (seg_gt == self.ood_indices[0])
         for label in self.ood_indices:
             out_index = np.logical_or(out_index, (seg_gt == label))
-        for k in confs.keys():
-            confs[k] = confs[k].squeeze()[mask]
-            if k in ("max_softmax", "max_logit"):
-                # gather their respective conf values
-                in_scores[k] = - confs[k][np.logical_not(out_index)]
-                out_scores[k] = - confs[k][out_index]
-            elif k == "entropy":
-                in_scores[k] = confs[k][np.logical_not(out_index)]
-                out_scores[k] = confs[k][out_index]
-            else:
-                raise KeyError(k)
 
+        # samples with out indices are positive class so they should have higher scores
+        if conf_type == "max_logit":
+            # gather their respective conf values
+            in_scores = - confs[np.logical_not(out_index)]
+            out_scores = - confs[out_index]
+        elif conf_type == "max_prob":
+            in_scores = 1 - confs[np.logical_not(out_index)]
+            out_scores = 1 - confs[out_index]
+        else:
+            # entropy, u
+            in_scores = confs[np.logical_not(out_index)]
+            out_scores = confs[out_index]
         return out_scores, in_scores
 
     def print_ood_measures(self, aurocs, auprs, fprs, eces, logger=None, text="max_softmax"):
@@ -115,8 +112,10 @@ class StreetHazardsDataset(CustomDataset):
         #     seg_gt[seg_gt == 0] = 255
         #     seg_gt = seg_gt - 1
         #     seg_gt[seg_gt == 254] = 255
+        # import ipdb; ipdb.set_trace()
+
         ood_mask = seg_gt == self.ood_indices[0]
-        for label in self.ood_indices:
+        for label in self.ood_indices[1:]:
             ood_mask = np.logical_or(ood_mask, seg_gt == label)
         return (~ood_mask)
 

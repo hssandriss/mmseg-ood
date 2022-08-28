@@ -282,22 +282,6 @@ def main():
         else:
             setattr(model.decode_head, "use_bags", False)
 
-        if not args.all:
-            conv_layer_weight_mag = torch.norm(model.decode_head.conv_seg.weight.squeeze(), dim=1)
-            if args.use_bags:
-                conv_layer_weight_mag = torch.norm(model.decode_head.conv_seg.weight[:-dataset.num_bags, :, :].squeeze(), dim=1)
-            print("conv_seg layer weight magnitude")
-            print(conv_layer_weight_mag)
-            print("conv_seg layer weight magnitude max-min")
-            print(conv_layer_weight_mag.max() - conv_layer_weight_mag.min())
-            conv_layer_bias_mag = torch.norm(model.decode_head.conv_seg.bias.unsqueeze(1), dim=1)
-            if args.use_bags:
-                conv_layer_bias_mag = torch.norm(model.decode_head.conv_seg.bias[:-dataset.num_bags].unsqueeze(1), dim=1)
-            print("conv_seg layer bias magnitude")
-            print(conv_layer_bias_mag)
-            print("conv_seg layer bias magnitude max-min")
-            print(conv_layer_bias_mag.max() - conv_layer_bias_mag.min())
-
         # clean gpu memory when starting a new evaluation.
         torch.cuda.empty_cache()
         eval_kwargs = {} if args.eval_options is None else args.eval_options
