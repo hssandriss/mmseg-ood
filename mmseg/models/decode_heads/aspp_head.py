@@ -194,10 +194,9 @@ class ASPPNfBllHead(NfBllBaseDecodeHead):
         """Forward function."""
         with torch.no_grad():
             output = self._forward_feature(inputs)
+        # import ipdb; ipdb.set_trace()
         assert output.is_leaf, "you are backpropagating on feature extractor!"
         z0 = self.density_estimation.sample_base(nsamples)
         z, sum_log_jacobians = self.density_estimation.forward(z0)
-
-        import ipdb; ipdb.set_trace()
         output = self.cls_seg(output, z)
         return output, sum_log_jacobians

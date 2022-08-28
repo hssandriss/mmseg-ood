@@ -81,7 +81,7 @@ class NfBllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
                      type='Normal', std=0.01, override=dict(name='conv_seg')),
                  flow_type='planar_flow',
                  flow_length=2,
-                 initialize_around_zero=False):
+                 nsamples_train=10):
         super(NfBllBaseDecodeHead, self).__init__(init_cfg)
         self._init_inputs(in_channels, in_index, input_transform)
         self.channels = channels
@@ -121,6 +121,8 @@ class NfBllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         self.latent_dim = self.conv_seg.weight.numel() + self.conv_seg.bias.numel()
         self.flow_type = flow_type
         self.flow_length = flow_length
+        self.nsamples_train = nsamples_train
+        self.nsamples_test = 1
         if self.flow_type in ('iaf_flow', 'planar_flow', 'radial_flow'):
             self.density_estimation = NormalizingFlowDensity(dim=self.latent_dim, flow_length=self.flow_length, flow_type=self.flow_type)
         else:
@@ -129,17 +131,20 @@ class NfBllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         self.w_numel, self.b_numel = self.conv_seg.weight.numel(), self.conv_seg.bias.numel()
         self.initial_p = torch.cat([self.conv_seg.weight.reshape(-1), self.conv_seg.bias.reshape(-1)]).detach()
 
-    def reload_params(self):
+    def update_z0_params(self):
         """
         To run after loading weights
         """
         self.initial_p = torch.cat([self.conv_seg.weight.reshape(-1), self.conv_seg.bias.reshape(-1)]).detach()
         self.density_estimation.mean = self.initial_p
 
-    def conv_seg_forward(self, x, p):
-        w = p[:self.w_numel].reshape(self.w_shape)
-        b = p[-self.b_numel:].reshape(self.b_shape)
-        return F.conv2d(input=x, weight=w, bias=b)
+    def conv_seg_forward(self, x, z):
+        z_list = torch.split(z, 1, 0)
+        output = []
+        for z_ in z_list:
+            z_ = z_.squeeze()
+            output.append(F.conv2d(input=x, weight=z_[:self.w_numel].reshape(self.w_shape), bias=z_[-self.b_numel:].reshape(self.b_shape)))
+        return torch.cat(output, dim=0)
 
     def extra_repr(self):
         """Extra repr."""
@@ -235,8 +240,8 @@ class NfBllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         Returns:
             dict[str, Tensor]: a dictionary of loss components
         """
-        seg_logits = self.forward(inputs)
-        losses = self.losses(seg_logits, gt_semantic_seg)
+        seg_logits, sum_log_jacobians = self.forward(inputs, self.nsamples_train)
+        losses = self.losses(seg_logits, gt_semantic_seg, sum_log_jacobians)
         return losses
 
     def forward_test(self, inputs, img_metas, test_cfg):
@@ -256,16 +261,16 @@ class NfBllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         """
         return self.forward(inputs)
 
-    def cls_seg(self, feat, p):
+    def cls_seg(self, feat, z):
         """Classify each pixel."""
         if self.dropout is not None:
             feat = self.dropout(feat)
             # Here I can add weight normalization
-        output = self.conv_seg_forward(feat, p)
+        output = self.conv_seg_forward(feat, z)
         return output
 
     @force_fp32(apply_to=('seg_logit', ))
-    def losses(self, seg_logit, seg_label):
+    def losses(self, seg_logit, seg_label, sum_log_jacobians):
         """Compute segmentation loss."""
         loss = dict()
         seg_logit = resize(
@@ -277,81 +282,34 @@ class NfBllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
             seg_weight = self.sampler.sample(seg_logit, seg_label)
         else:
             seg_weight = None
-        seg_label = seg_label.squeeze(1)
+        seg_label = seg_label.squeeze(1).repeat(sum_log_jacobians.numel(), 1, 1)
 
         if not isinstance(self.loss_decode, nn.ModuleList):
             losses_decode = [self.loss_decode]
         else:
             losses_decode = self.loss_decode
-        if self.use_bags:
-            # For computing accuracy
-            smp = torch.zeros_like(seg_logit[:, :-self.bags_kwargs["num_bags"], :, :])
-            for bag_idx in range(self.bags_kwargs["num_bags"]):
-                cp_seg_logit = seg_logit.detach().clone()
-                bag_seg_logit = cp_seg_logit[:, self.bags_kwargs["bag_masks"][bag_idx], :, :]
-                # ignores other after softmax
-                bag_smp = F.softmax(bag_seg_logit, dim=1)[:, :-1, :, :]
-                # orig_indices = self.bags_classes[bag_idx][:-1]
-                mask = self.bags_kwargs["bag_masks"][bag_idx][:-self.bags_kwargs["num_bags"]]
-                smp[:, mask, :, :] = bag_smp
-            loss['acc_seg'] = accuracy(smp, seg_label, ignore_index=self.ignore_index)
-        else:
-            loss['acc_seg'] = accuracy(seg_logit, seg_label, ignore_index=self.ignore_index)
+
+        loss['acc_seg'] = accuracy(seg_logit, seg_label, ignore_index=self.ignore_index)
 
         for loss_decode in losses_decode:
             if loss_decode.loss_name not in loss:
-                if self.use_bags:
-                    # Compute loss using bags only implemented for CE and LDAM
-                    loss_bags = []
-                    for bag_idx in range(self.bags_kwargs["num_bags"]):
-                        bag_seg_logit = seg_logit[:, self.bags_kwargs["bag_masks"][bag_idx], :, :]
-                        bag_seg_label = seg_label
-                        for c in range(self.num_classes - self.bags_kwargs["num_bags"]):
-                            remapped_index = self.bags_kwargs["bags_classes"][bag_idx].index(self.bags_kwargs["bag_label_maps"][bag_idx][c])
-                            # bag_seg_label[bag_seg_label == c] = remapped_index # throws a cuda error
-                            bag_seg_label = torch.where(bag_seg_label != c, bag_seg_label, remapped_index)
-                        if loss_decode.loss_name.endswith("ldam"):
-                            loss_bag = loss_decode(
-                                bag_seg_logit,
-                                bag_seg_label,
-                                weight=seg_weight,
-                                ignore_index=self.ignore_index,
-                                bag_idx=bag_idx)
-                        elif loss_decode.loss_name.startswith("loss_edl"):
-                            raise NotImplementedError
-                        else:
-                            loss_bag = loss_decode(
-                                bag_seg_logit,
-                                bag_seg_label,
-                                weight=seg_weight,
-                                ignore_index=self.ignore_index)
-                        loss[loss_decode.loss_name.replace("loss", "L") + f"_bag_{bag_idx}"] = loss_bag.detach()
-                        loss_bags.append(loss_bag)
-
-                    loss[loss_decode.loss_name] = sum(loss_bags)
-                else:
-                    loss[loss_decode.loss_name] = loss_decode(
-                        seg_logit,
-                        seg_label,
-                        weight=seg_weight,
-                        ignore_index=self.ignore_index)
-                    if loss_decode.loss_name.startswith("loss_edl"):
-                        # load
-                        logs = loss_decode.get_logs(seg_logit,
-                                                    seg_label,
-                                                    self.ignore_index)
-                        loss.update(logs)
+                loss[loss_decode.loss_name] = loss_decode(seg_logit, seg_label, ignore_index=self.ignore_index) + sum_log_jacobians.mean()
+                if loss_decode.loss_name.startswith("loss_edl"):
+                    # load
+                    logs = loss_decode.get_logs(seg_logit,
+                                                seg_label,
+                                                self.ignore_index)
+                    logs['mean_jacobian_logdet'] = sum_log_jacobians.mean().detach()
+                    # import ipdb; ipdb.set_trace()
+                    loss.update(logs)
             else:
-                if self.use_bags:
+                loss[loss_decode.loss_name] += loss_decode(
+                    seg_logit,
+                    seg_label,
+                    weight=seg_weight,
+                    ignore_index=self.ignore_index)
+                if loss_decode.loss_name.startswith("loss_edl"):
                     raise NotImplementedError
-                else:
-                    loss[loss_decode.loss_name] += loss_decode(
-                        seg_logit,
-                        seg_label,
-                        weight=seg_weight,
-                        ignore_index=self.ignore_index)
-                    if loss_decode.loss_name.startswith("loss_edl"):
-                        raise NotImplementedError
 
         return loss
 
@@ -364,8 +322,8 @@ class NormalizingFlowDensity(nn.Module):
         self.flow_type = flow_type
 
         # Base gaussian distribution
-        self.mean = nn.Parameter(torch.zeros(self.dim), requires_grad=False)
-        self.cov = nn.Parameter(torch.eye(self.dim), requires_grad=False)
+        self.z0_mean = torch.Tensor(torch.zeros(self.dim)).cuda()
+        self.z0_cov = torch.Tensor(torch.eye(self.dim)).cuda()
 
         if self.flow_type == 'radial_flow':
             self.transforms = nn.Sequential(*(
@@ -388,17 +346,16 @@ class NormalizingFlowDensity(nn.Module):
             z_next = transform(z)
             sum_log_jacobians = sum_log_jacobians + transform.log_abs_det_jacobian(z, z_next)
             z = z_next
-
         return z, sum_log_jacobians
 
     def log_prob(self, x):
         z, sum_log_jacobians = self.forward(x)
-        log_prob_z = tdist.MultivariateNormal(self.mean, self.cov).log_prob(z)
+        log_prob_z = tdist.MultivariateNormal(self.z0_mean, self.z0_cov).log_prob(z)
         log_prob_x = log_prob_z + sum_log_jacobians
         return log_prob_x
 
     def sample_base(self, n):
-        return tdist.MultivariateNormal(self.mean, self.cov).sample([n])
+        return tdist.MultivariateNormal(self.z0_mean, self.z0_cov).sample([n])
 
     # def latent_loss(self, log_det):
     #     """Computes KL loss.
@@ -406,5 +363,6 @@ class NormalizingFlowDensity(nn.Module):
     #         mean: mean of initial model w_0.
     #         log_det: log-determinant of the Jacobian.
     #     Returns: sum of KL loss over the minibatch.
+    #     PS: ignore because reduces to -log_det + cte in our case as we have fixed initial distribution
     #     """
     #     return -.5 * torch.sum(self.mean.pow(2), dim=1, keepdim=True) - log_det

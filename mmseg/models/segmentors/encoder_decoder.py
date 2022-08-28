@@ -309,7 +309,7 @@ class EncoderDecoder(BaseSegmentor):
         to_eval(self, 'EncoderDecoder')
         filtered = []
         for name, param in self.named_parameters():
-            if 'conv_seg' not in name and 'loss_decode' not in name:
+            if 'conv_seg' not in name and 'loss_decode' not in name and 'density_estimation' not in name:
                 param.requires_grad = False
                 print(name, "has gradient disabled")
             else:
