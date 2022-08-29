@@ -14,7 +14,7 @@ def relu_evidence(logits):
 
 def sigmoid_evidence(logits):
     # This function to generate evidence is used for the first example
-    max_evidence = 1e4
+    max_evidence = 1e2
     # max_evidence = 10.
     return torch.sigmoid(logits) * max_evidence
 
@@ -22,10 +22,10 @@ def sigmoid_evidence(logits):
 def exp_evidence(logits):
     # This one usually works better and used for the second and third examples
     # For general settings and different datasets, you may try this one first
-    # b = torch.tensor(20)
-    b = logits.max().detach()
-    if b > torch.tensor(torch.finfo(torch.float32).max).log(): # 88.72
-        import ipdb; ipdb.set_trace()
+    b = torch.tensor(25)
+    # b = logits.max().detach()
+    # if b > torch.tensor(torch.finfo(torch.float32).max).log():  # 88.72
+    #     import ipdb; ipdb.set_trace()
     return torch.exp(logits - b) * torch.exp(b)
     # return torch.exp(torch.clamp(logits, -50, 50))
 
@@ -33,7 +33,7 @@ def exp_evidence(logits):
 def softplus_evidence(logits):
     # This one is another alternative and
     # usually behaves better than the relu_evidence
-    return F.softplus(logits, beta=0.1)
+    return F.softplus(logits)
 
 
 def mse_edl_loss(one_hot_gt, alpha, num_classes):
@@ -55,12 +55,13 @@ def ce_edl_loss(one_hot_gt, alpha, num_classes, func):
     strength = torch.sum(alpha, dim=1, keepdim=True)
     # L_err
     A = torch.sum(one_hot_gt * (func(strength) - func(alpha)), axis=1, keepdims=True)
+    A_ = torch.sum((1 - one_hot_gt) * (func(strength) - func(strength - alpha)), axis=1, keepdims=True)
     # L_kl
     alpha_kl = (alpha - 1) * (1 - one_hot_gt) + 1
     C = KL(alpha_kl, num_classes)
     # L_EUC
     D, E = EUC(alpha, one_hot_gt, num_classes)
-    return A, C, D, E
+    return A + A_, C, D, E
 
 
 def KL(alpha, num_classes):
@@ -159,6 +160,8 @@ class EDLLoss(nn.Module):
         assert reduction_override in (None, 'none', 'mean', 'sum')
         reduction = (reduction_override if reduction_override else self.reduction)
         evidence = self.logit2evidence(pred)
+        if (evidence != evidence).any():
+            import ipdb; ipdb.set_trace()
         alpha = (evidence + 1)**2 if self.pow_alpha else evidence + 1
         target_expanded = target.data.unsqueeze(1).clone()
         mask_ignore = (target_expanded == 255)
