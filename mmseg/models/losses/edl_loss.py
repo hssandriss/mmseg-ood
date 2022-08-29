@@ -16,7 +16,7 @@ def sigmoid_evidence(logits):
     # This function to generate evidence is used for the first example
     max_evidence = 1e2
     shift = 0
-    slope = 1 / 3
+    slope = 0.2
     # max_evidence = 10.
     return torch.sigmoid(slope * (logits - shift)) * max_evidence
 
