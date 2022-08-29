@@ -139,12 +139,16 @@ class NfBllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         self.density_estimation.mean = self.initial_p
 
     def conv_seg_forward(self, x, z):
-        z_list = torch.split(z, 1, 0)
-        output = []
-        for z_ in z_list:
-            z_ = z_.squeeze()
-            output.append(F.conv2d(input=x, weight=z_[:self.w_numel].reshape(self.w_shape), bias=z_[-self.b_numel:].reshape(self.b_shape)))
-        return torch.cat(output, dim=0)
+        # z_list = torch.split(z, 1, 0)
+        # output = []
+        # for z_ in z_list:
+        #     z_ = z_.squeeze()
+        #     output.append(F.conv2d(input=x, weight=z_[:self.w_numel].reshape(self.w_shape), bias=z_[-self.b_numel:].reshape(self.b_shape)))
+        # return torch.cat(output, dim=0)
+        # import ipdb; ipdb.set_trace()
+        assert z.shape[0] == 1
+        z_ = z.squeeze()
+        return F.conv2d(input=x, weight=z_[:self.w_numel].reshape(self.w_shape), bias=z_[-self.b_numel:].reshape(self.b_shape))
 
     def extra_repr(self):
         """Extra repr."""
