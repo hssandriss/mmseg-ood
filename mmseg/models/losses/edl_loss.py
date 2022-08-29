@@ -14,9 +14,9 @@ def relu_evidence(logits):
 
 def sigmoid_evidence(logits):
     # This function to generate evidence is used for the first example
-    max_evidence = 1e10
+    max_evidence = 1e2
     shift = 0
-    slope = 1
+    slope = 1 / 3
     # max_evidence = 10.
     return torch.sigmoid(slope * (logits - shift)) * max_evidence
 
@@ -55,13 +55,14 @@ def ce_edl_loss(one_hot_gt, alpha, num_classes, func):
     strength = torch.sum(alpha, dim=1, keepdim=True)
     # L_err
     A = torch.sum(one_hot_gt * (func(strength) - func(alpha)), axis=1, keepdims=True)
-    A_ = torch.sum((1 - one_hot_gt) * (func(strength) - func(strength - alpha)), axis=1, keepdims=True)
+    # A_ = torch.sum((1 - one_hot_gt) * (func(strength) - func(strength - alpha)), axis=1, keepdims=True)
     # L_kl
     alpha_kl = (alpha - 1) * (1 - one_hot_gt) + 1
     C = KL(alpha_kl, num_classes)
     # L_EUC
     D, E = EUC(alpha, one_hot_gt, num_classes)
-    return A + A_, C, D, E
+    return A, C, D, E
+    # return A + A_, C, D, E
 
 
 def KL(alpha, num_classes):
@@ -157,7 +158,7 @@ class EDLLoss(nn.Module):
                 avg_factor=None,
                 reduction_override=None,
                 ignore_index=255):
-        # print_log(f"Epoch ---> {self.epoch_num}/{self.total_epochs}")
+        # print_()log(f"Epoch ---> {self.epoch_num}/{self.total_epochs}")
         assert reduction_override in (None, 'none', 'mean', 'sum')
         reduction = (reduction_override if reduction_override else self.reduction)
         evidence = self.logit2evidence(pred)
@@ -276,6 +277,7 @@ class EDLLoss(nn.Module):
         max_prob_flat = max_prob.permute(1, 0, 2, 3).flatten(1, -1).squeeze()
         u_flat = u.permute(1, 0, 2, 3).flatten(1, -1).squeeze()
         logs["avg_max_prob_u_corr"] = torchmetrics.functional.pearson_corrcoef(max_prob_flat, u_flat)
+        logs["epoch"] = torch.tensor(float(self.epoch_num))
         return logs
 
     # @ property
