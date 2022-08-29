@@ -153,7 +153,7 @@ def train_segmentor(model,
                                        cfg.checkpoint_config, cfg.log_config,
                                        cfg.get('momentum_config', None))
 
-    runner.register_hook(ParseEpochToLossHook(), priority='NORMAL')
+    runner.register_hook(ParseEpochToLossHook(), priority='VERY_HIGH')
     if distributed:
         # when distributed training by epoch, using`DistSamplerSeedHook` to set
         # the different seed to distributed sampler for each epoch, it will
