@@ -278,6 +278,7 @@ class EDLLoss(nn.Module):
         u_flat = u.permute(1, 0, 2, 3).flatten(1, -1).squeeze()
         logs["avg_max_prob_u_corr"] = torchmetrics.functional.pearson_corrcoef(max_prob_flat, u_flat)
         logs["epoch"] = torch.tensor(float(self.epoch_num))
+        logs["dummy"] = torch.tensor(float(1))
         return logs
 
     # @ property
