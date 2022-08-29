@@ -8,6 +8,8 @@ from ..builder import HEADS
 from .decode_head import BaseDecodeHead
 from .nf_bll_decode_head import NfBllBaseDecodeHead
 
+import time
+
 
 class ASPPModule(nn.ModuleList):
     """Atrous Spatial Pyramid Pooling (ASPP) Module.
@@ -192,11 +194,22 @@ class ASPPNfBllHead(NfBllBaseDecodeHead):
 
     def forward(self, inputs, nsamples):
         """Forward function."""
+        # torch.cuda.synchronize()
+        # t0 = time.time()
         with torch.no_grad():
             output = self._forward_feature(inputs)
         # import ipdb; ipdb.set_trace()
         assert output.is_leaf, "you are backpropagating on feature extractor!"
+        # torch.cuda.synchronize()
+        # t1 = time.time()
         z0 = self.density_estimation.sample_base(nsamples)
+        # torch.cuda.synchronize()
+        # t2 = time.time()
         z, sum_log_jacobians = self.density_estimation.forward(z0)
+        # torch.cuda.synchronize()
+        # t3 = time.time()
         output = self.cls_seg(output, z)
+        # torch.cuda.synchronize()
+        # t4 = time.time()
+        # import ipdb; ipdb.set_trace()
         return output, sum_log_jacobians

@@ -15,7 +15,6 @@ from pyro.distributions.transforms.planar import Planar
 from pyro.distributions.transforms.radial import Radial
 from pyro.distributions.transforms.affine_autoregressive import affine_autoregressive
 import torch.distributions as tdist
-
 "test w/: python tools/train.py configs/deeplabv3/deeplabv3_r50-d8_720x720_70e_cityscapes_nf_bll.py --experiment-tag 'TEST'"
 
 
@@ -326,9 +325,9 @@ class NormalizingFlowDensity(nn.Module):
         self.flow_type = flow_type
 
         # Base gaussian distribution
-        self.z0_mean = torch.Tensor(torch.zeros(self.dim)).cuda()
-        self.z0_cov = torch.Tensor(torch.eye(self.dim) * 0.1).cuda()
-
+        self.z0_mean = torch.Tensor(torch.zeros(self.dim)).cuda().contiguous()
+        self.z0_cov = torch.Tensor(torch.eye(self.dim) * 0.1).cuda().contiguous()
+        self.base_dist = tdist.MultivariateNormal(self.z0_mean, self.z0_cov)
         if self.flow_type == 'radial_flow':
             self.transforms = nn.Sequential(*(
                 Radial(dim) for _ in range(flow_length)
@@ -354,12 +353,12 @@ class NormalizingFlowDensity(nn.Module):
 
     def log_prob(self, x):
         z, sum_log_jacobians = self.forward(x)
-        log_prob_z = tdist.MultivariateNormal(self.z0_mean, self.z0_cov).log_prob(z)
+        log_prob_z = self.base_dist.log_prob(z)
         log_prob_x = log_prob_z + sum_log_jacobians
         return log_prob_x
 
     def sample_base(self, n):
-        return tdist.MultivariateNormal(self.z0_mean, self.z0_cov).sample([n])
+        return self.base_dist.sample([n])
 
     # def latent_loss(self, log_det):
     #     """Computes KL loss.
