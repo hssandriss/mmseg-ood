@@ -262,7 +262,7 @@ class NfBllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         Returns:
             Tensor: Output segmentation map.
         """
-        seg_logits, _ = self.forward(inputs, 1)
+        seg_logits, _ = self.forward(inputs, 20)
         return seg_logits
 
     def cls_seg(self, feat, z):
