@@ -127,7 +127,7 @@ def parse_args():
 
 
 def main():
-    import warnings; warnings.filterwarnings("ignore")
+    # import warnings; warnings.filterwarnings("ignore")
     args = parse_args()
     assert args.out or args.eval or args.format_only or args.show \
         or args.show_dir, \

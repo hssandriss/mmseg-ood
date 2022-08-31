@@ -109,6 +109,7 @@ class BaseSegmentor(BaseModule, metaclass=ABCMeta):
         if return_loss:
             return self.forward_train(img, img_metas, **kwargs)
         else:
+            # import ipdb; ipdb.set_trace()
             return self.forward_test(img, img_metas, **kwargs)
 
     def train_step(self, data_batch, optimizer, **kwargs):

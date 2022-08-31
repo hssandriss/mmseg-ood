@@ -44,7 +44,7 @@ def plot_conf(conf, file):
     plt.figure()
     sns.heatmap(
         conf.squeeze(),
-        xticklabels=False, yticklabels=False).get_figure().savefig(file)
+        xticklabels=False, yticklabels=False, cmap='Greys').get_figure().savefig(file)
     plt.cla(); plt.clf(); plt.close('all')
 
 
@@ -106,7 +106,7 @@ def single_gpu_test(model,
     for batch_indices, data in zip(loader_indices, data_loader):
         with torch.no_grad():
             result, seg_logit = model(return_loss=False, **data)  # returns labels and logits
-
+        # import ipdb; ipdb.set_trace()
         seg_logit = seg_logit.detach()
         seg_gt = dataset.get_gt_seg_map_by_idx_and_reduce_zero_label(batch_indices[0])
 
@@ -157,8 +157,14 @@ def single_gpu_test(model,
                         plot_conf(1 - u.cpu().numpy(), out_file[: -4] + "_edl_1_minus_u" + out_file[-4:])
                         plot_conf(probs.max(dim=1)[0].cpu().numpy(), out_file[: -4] + "_edl_conf" + out_file[-4:])
                     else:
+                        # import ipdb; ipdb.set_trace()
                         probs = F.softmax(seg_logit, dim=1)
-                        plot_conf(probs.max(dim=1)[0].cpu().numpy(), out_file[: -4] + "_sm_conf" + out_file[-4:])
+                        for sample in range(probs.shape[0]):
+                            plot_conf(probs[sample, :, :, :].max(dim=0)[0].cpu().numpy(),
+                                      out_file[: -4] + f"_sm_conf_sample_{sample}" + out_file[-4:])
+                        plot_conf(probs.var(dim=0).max(dim=0)[0].cpu().numpy(), out_file[: -4] + f"_sm_var" + out_file[-4:])
+                        plot_conf(probs.max(dim=1)[0].var(dim=0).cpu().numpy(), out_file[: -4] + f"_sm_var_1" + out_file[-4:])
+
                 # Mask for edges between separate labels
                 plot_mask(dataset.edge_detector(seg_gt).cpu().numpy(), out_file[: -4] + "_edge_mask" + out_file[-4:])
                 # Mask of ood samples
@@ -172,30 +178,31 @@ def single_gpu_test(model,
             result = dataset.format_results(result, indices=batch_indices, **format_args)
 
         if pre_eval:
-            # TODO: adapt samples_per_gpu > 1.
-            # only samples_per_gpu=1 valid now
-            # For originally included metrics mIOU
-            result_seg = dataset.pre_eval(result, indices=batch_indices)[0]
-            # For added metrics OOD, calibration
-            if not model.module.decode_head.use_bags:
-                if model.module.decode_head.loss_decode.loss_name.startswith("loss_edl"):
-                    # For EDL probs
-                    seg_evidence = model.module.decode_head.loss_decode.logit2evidence(seg_logit) + 1
-                    seg_evidence = seg_evidence**2 if model.module.decode_head.loss_decode.pow_alpha else seg_evidence
-                    result_oth = dataset.pre_eval_custom(seg_evidence, seg_gt, "edl")
-                else:
-                    # For softmax probs
-                    result_oth = dataset.pre_eval_custom(seg_logit, seg_gt, "softmax")
-            else:
-                result_oth = dataset.pre_eval_custom(seg_evidence, seg_gt, "softmax",
-                                                     model.module.decode_head.use_bags,
-                                                     model.module.decode_head.bags_kwargs)
-            result = [(result_seg, result_oth)]
-            results.extend(result)
+            # # TODO: adapt samples_per_gpu > 1.
+            # # only samples_per_gpu=1 valid now
+            # # For originally included metrics mIOU
+            # result_seg = dataset.pre_eval(result, indices=batch_indices)[0]
+            # # For added metrics OOD, calibration
+            # if not model.module.decode_head.use_bags:
+            #     if model.module.decode_head.loss_decode.loss_name.startswith("loss_edl"):
+            #         # For EDL probs
+            #         seg_evidence = model.module.decode_head.loss_decode.logit2evidence(seg_logit) + 1
+            #         seg_evidence = seg_evidence**2 if model.module.decode_head.loss_decode.pow_alpha else seg_evidence
+            #         result_oth = dataset.pre_eval_custom(seg_evidence, seg_gt, "edl")
+            #     else:
+            #         # For softmax probs
+            #         result_oth = dataset.pre_eval_custom(seg_logit, seg_gt, "softmax")
+            # else:
+            #     result_oth = dataset.pre_eval_custom(seg_evidence, seg_gt, "softmax",
+            #                                          model.module.decode_head.use_bags,
+            #                                          model.module.decode_head.bags_kwargs)
+            # result = [(result_seg, result_oth)]
+            # results.extend(result)
+            pass
         else:
             results.extend(result)
 
-        batch_size = len(result)
+        batch_size = 1
         for _ in range(batch_size):
             prog_bar.update()
     return results
