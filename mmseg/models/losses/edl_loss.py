@@ -77,19 +77,22 @@ def mse_edl_loss(one_hot_gt, alpha, num_classes):
     return A, B, C, D, E
 
 
-def ce_edl_loss(one_hot_gt, alpha, num_classes, func, full=False):
+def ce_edl_loss(one_hot_gt, alpha, num_classes, func, full=False, with_var=False):
     strength = torch.sum(alpha, dim=1, keepdim=True)
     # L_err
     A = torch.sum(one_hot_gt * (func(strength) - func(alpha)), axis=1, keepdims=True)
     if full:
         A_ = torch.sum((1 - one_hot_gt) * (func(strength) - func(strength - alpha)), axis=1, keepdims=True)
+        A = A + A_
+    if with_var:
+        B = torch.sum(alpha * (strength - alpha) / (strength * strength * (strength + 1)), dim=1, keepdim=True)
+        A = A + B
     # L_kl
     alpha_kl = (alpha - 1) * (1 - one_hot_gt) + 1
     C = KL(alpha_kl, num_classes)
     # L_EUC
     D, E = EUC(alpha, one_hot_gt, num_classes)
-    if full:
-        return A + A_, C, D, E
+
     return A, C, D, E
 
 
@@ -245,8 +248,17 @@ class EDLLoss(nn.Module):
                 loss = A + self.lam_schedule[self.epoch_num] * D + (1. - self.lam_schedule[self.epoch_num]) * E
             elif self.regularization == 'none':
                 loss = A
-        elif self.loss_name.endswith("mll_full"):  # Eq. 3 Maximum Likelihood Type II
+        elif self.loss_name.endswith("mll_bis"):  # Eq. 3 Maximum Likelihood Type II
             A, C, D, E = ce_edl_loss(one_hot_gt, alpha, self.num_classes, func=torch.log, full=True)
+            if self.regularization == 'kld':
+                loss = A + self.lam_schedule[self.epoch_num] * C
+            elif self.regularization == 'euc':
+                # D: acc_uncertain, E: inacc_certain
+                loss = A + self.lam_schedule[self.epoch_num] * D + (1. - self.lam_schedule[self.epoch_num]) * E
+            elif self.regularization == 'none':
+                loss = A
+        elif self.loss_name.endswith("mll_var"):  # Eq. 3 Maximum Likelihood Type II
+            A, C, D, E = ce_edl_loss(one_hot_gt, alpha, self.num_classes, func=torch.log, full=False, with_var=True)
             if self.regularization == 'kld':
                 loss = A + self.lam_schedule[self.epoch_num] * C
             elif self.regularization == 'euc':
