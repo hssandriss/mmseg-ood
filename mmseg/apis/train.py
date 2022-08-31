@@ -226,5 +226,6 @@ def train_segmentor(model,
         model.module.freeze_feature_extractor()
     if freeze_encoder:
         model.module.freeze_encoder()
-
+    # torch.autograd.set_detect_anomaly(True)
     runner.run(data_loaders, cfg.workflow)
+    # torch.autograd.set_detect_anomaly(False)

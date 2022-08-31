@@ -10,7 +10,7 @@ class ParseEpochToLossHook(Hook):
             runner.model.module.decode_head.loss_decode.total_epochs = runner._max_epochs
 
     def before_train_epoch(self, runner):
-        print_log(f"Epoch ---> {runner.epoch}/{runner._max_epochs}")
+        # print_log(f"Epoch ---> {runner.epoch}/{runner._max_epochs}")
         if hasattr(runner.model.module.decode_head.loss_decode, "epoch_num"):
             runner.model.module.decode_head.loss_decode.epoch_num = runner.epoch
 

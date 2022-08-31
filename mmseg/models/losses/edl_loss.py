@@ -4,7 +4,8 @@ import torch.nn.functional as F
 from ..builder import LOSSES
 import torchmetrics
 from mmcv.utils import print_log
-EPS = 1e-10
+import numpy as np
+EPS = 1e-7  # 1e-5
 
 
 def relu_evidence(logits):
@@ -14,20 +15,45 @@ def relu_evidence(logits):
 
 def sigmoid_evidence(logits):
     # This function to generate evidence is used for the first example
-    max_evidence = 1e2
-    shift = 0
-    slope = 0.2
-    # max_evidence = 10.
+    max_evidence = 1e3
+    shift = 35
+    slope = .1
     return torch.sigmoid(slope * (logits - shift)) * max_evidence
 
 
 def exp_evidence(logits):
     # This one usually works better and used for the second and third examples
     # For general settings and different datasets, you may try this one first
+    return torch.exp(torch.clip(logits / 10, -20., 20.))
+
+
+def exp_0_evidence(logits):
+    # This one usually works better and used for the second and third examples
+    # For general settings and different datasets, you may try this one first
     b = logits.max().detach()
     if b > torch.tensor(torch.finfo(torch.float32).max).log():  # 88.72
         import ipdb; ipdb.set_trace()
     return torch.exp(logits - b) * torch.exp(b)
+
+
+def exp_1_evidence(logits):
+    # This one usually works better and used for the second and third examples
+    # For general settings and different datasets, you may try this one first
+
+    return 1. / (torch.exp(-logits) + EPS)
+
+
+def exp_2_evidence(logits):
+    # This one usually works better and used for the second and third examples
+    # For general settings and different datasets, you may try this one first
+
+    mask_pos = (logits >= 0)
+    mask_neg = ~mask_pos
+
+    ans = torch.zeros_like(logits)
+    ans[mask_pos] = 1 / (EPS + torch.exp(-logits[mask_pos]))
+    ans[mask_neg] = torch.exp(logits[mask_neg])
+    return ans
 
 
 def softplus_evidence(logits):
@@ -51,18 +77,20 @@ def mse_edl_loss(one_hot_gt, alpha, num_classes):
     return A, B, C, D, E
 
 
-def ce_edl_loss(one_hot_gt, alpha, num_classes, func):
+def ce_edl_loss(one_hot_gt, alpha, num_classes, func, full=False):
     strength = torch.sum(alpha, dim=1, keepdim=True)
     # L_err
     A = torch.sum(one_hot_gt * (func(strength) - func(alpha)), axis=1, keepdims=True)
-    # A_ = torch.sum((1 - one_hot_gt) * (func(strength) - func(strength - alpha)), axis=1, keepdims=True)
+    if full:
+        A_ = torch.sum((1 - one_hot_gt) * (func(strength) - func(strength - alpha)), axis=1, keepdims=True)
     # L_kl
     alpha_kl = (alpha - 1) * (1 - one_hot_gt) + 1
     C = KL(alpha_kl, num_classes)
     # L_EUC
     D, E = EUC(alpha, one_hot_gt, num_classes)
+    if full:
+        return A + A_, C, D, E
     return A, C, D, E
-    # return A + A_, C, D, E
 
 
 def KL(alpha, num_classes):
@@ -118,14 +146,19 @@ class EDLLoss(nn.Module):
         self.avg_non_ignore = avg_non_ignore
         if logit2evidence == "exp":
             self.logit2evidence = exp_evidence
+        elif logit2evidence == "exp_0":
+            self.logit2evidence = exp_0_evidence
+        elif logit2evidence == "exp_1":
+            self.logit2evidence = exp_1_evidence
+        elif logit2evidence == "exp_2":
+            self.logit2evidence = exp_2_evidence
+        elif logit2evidence == "sig":
+            self.logit2evidence = sigmoid_evidence
         elif logit2evidence == "softplus":
             self.logit2evidence = softplus_evidence
         elif logit2evidence == "relu":
             self.logit2evidence = relu_evidence
-        elif logit2evidence == "sig":
-            self.logit2evidence = sigmoid_evidence
-        # elif logit2evidence == "tanh":
-        #     self.logit2evidence = tanh_evidence
+
         else:
             raise KeyError(logit2evidence)
         self.regularization = regularization
@@ -149,6 +182,9 @@ class EDLLoss(nn.Module):
         self.last_C = 0
         self.last_D = 0
         self.last_E = 0
+        self.epoch_num_ = 0
+        self.epoch_nums = []
+        self.iter_cnt = 0
         print_log(', '.join([f"{i}: {self.lam_schedule[i]:.4f}" for i in range(self.total_epochs)]))
 
     def forward(self,
@@ -160,11 +196,19 @@ class EDLLoss(nn.Module):
                 ignore_index=255):
         # print_()log(f"Epoch ---> {self.epoch_num}/{self.total_epochs}")
         assert reduction_override in (None, 'none', 'mean', 'sum')
+        if self.epoch_num == self.epoch_num_ + 1 and self.epoch_num > 0:
+            if np.mean(self.epoch_nums) % 1 != 0:
+                import ipdb; ipdb.set_trace()
+            print_log(f"Lam: {self.lam_schedule[self.epoch_num_]}")
+            print_log(f"Epoch {self.epoch_num_} is done with {self.iter_cnt} iterations")
+            self.iter_cnt = 0
+            self.epoch_nums = []
         reduction = (reduction_override if reduction_override else self.reduction)
         evidence = self.logit2evidence(pred)
         if (evidence != evidence).any():
             # detecting inf or nans
             import ipdb; ipdb.set_trace()
+
         alpha = (evidence + 1)**2 if self.pow_alpha else evidence + 1
         target_expanded = target.data.unsqueeze(1).clone()
         mask_ignore = (target_expanded == 255)
@@ -201,6 +245,16 @@ class EDLLoss(nn.Module):
                 loss = A + self.lam_schedule[self.epoch_num] * D + (1. - self.lam_schedule[self.epoch_num]) * E
             elif self.regularization == 'none':
                 loss = A
+        elif self.loss_name.endswith("mll_full"):  # Eq. 3 Maximum Likelihood Type II
+            A, C, D, E = ce_edl_loss(one_hot_gt, alpha, self.num_classes, func=torch.log, full=True)
+            if self.regularization == 'kld':
+                loss = A + self.lam_schedule[self.epoch_num] * C
+            elif self.regularization == 'euc':
+                # D: acc_uncertain, E: inacc_certain
+                loss = A + self.lam_schedule[self.epoch_num] * D + (1. - self.lam_schedule[self.epoch_num]) * E
+            elif self.regularization == 'none':
+                loss = A
+
         else:
             raise NotImplementedError
 
@@ -227,6 +281,9 @@ class EDLLoss(nn.Module):
         if self.loss_name.endswith("mse"):
             self.last_B = B.detach()
             self.last_B = torch.where(mask_ignore, torch.zeros_like(self.last_B), self.last_B).sum() / avg_factor
+        self.epoch_num_ = self.epoch_num
+        self.iter_cnt += 1
+        self.epoch_nums.append(self.epoch_num)
 
         return self.loss_weight * loss_cls
 
@@ -269,7 +326,6 @@ class EDLLoss(nn.Module):
         logs["mean_acc_uncertain"] = self.last_D
         logs["mean_inacc_certain"] = self.last_E
 
-        logs["lam"] = self.lam_schedule[self.epoch_num]
         logs["avg_max_prob"] = (max_prob * ~mask_ignore).sum() / ((~mask_ignore).sum() + EPS)
         logs["avg_uncertainty"] = (u * ~mask_ignore).sum() / ((~mask_ignore).sum() + EPS)
         logs["acc_seg"] = succ.sum() / (fail.sum() + succ.sum()) * 100
@@ -277,8 +333,6 @@ class EDLLoss(nn.Module):
         max_prob_flat = max_prob.permute(1, 0, 2, 3).flatten(1, -1).squeeze()
         u_flat = u.permute(1, 0, 2, 3).flatten(1, -1).squeeze()
         logs["avg_max_prob_u_corr"] = torchmetrics.functional.pearson_corrcoef(max_prob_flat, u_flat)
-        logs["epoch"] = torch.tensor(float(self.epoch_num))
-        logs["dummy"] = torch.tensor(float(1))
         return logs
 
     # @ property
