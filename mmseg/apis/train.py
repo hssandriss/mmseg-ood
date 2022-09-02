@@ -199,13 +199,15 @@ def train_segmentor(model,
             priority = hook_cfg.pop('priority', 'NORMAL')
             hook = build_from_cfg(hook_cfg, HOOKS)
             runner.register_hook(hook, priority=priority)
-    assert cfg.load_from, "It is required to pre-learned features"
+    assert cfg.load_from or cfg.resume_from, "It is required to pre-learned features"
     if cfg.resume_from is None and cfg.get('auto_resume'):
         resume_from = find_latest_checkpoint(cfg.work_dir)
         if resume_from is not None:
             cfg.resume_from = resume_from
     if cfg.resume_from:
         runner.resume(cfg.resume_from)
+        runner.model.module.freeze_encoder()
+        runner.model.module.freeze_feature_extractor()
     elif cfg.load_from:
         runner.load_checkpoint(cfg.load_from)
         runner.model.module.freeze_encoder()
