@@ -262,7 +262,7 @@ class NfBllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         Returns:
             Tensor: Output segmentation map.
         """
-        seg_logits, _ = self.forward(inputs, 20)
+        seg_logits, _ = self.forward(inputs, 50)
         return seg_logits
 
     def cls_seg(self, feat, z):
@@ -326,8 +326,8 @@ class NormalizingFlowDensity(nn.Module):
         self.flow_type = flow_type
 
         # Base gaussian distribution
-        self.z0_mean = torch.Tensor(torch.zeros(self.dim)).cuda().contiguous()
-        self.z0_cov = torch.Tensor(torch.eye(self.dim) * 0.1).cuda().contiguous()
+        self.z0_mean = nn.Parameter(torch.zeros(self.dim), requires_grad=False)
+        self.z0_cov = nn.Parameter(torch.eye(self.dim), requires_grad=False)
         self.base_dist = tdist.MultivariateNormal(self.z0_mean, self.z0_cov)
         if self.flow_type == 'radial_flow':
             self.transforms = nn.Sequential(*(
@@ -359,6 +359,7 @@ class NormalizingFlowDensity(nn.Module):
         return log_prob_x
 
     def sample_base(self, n):
+        import ipdb; ipdb.set_trace()
         return self.base_dist.sample([n])
 
     # def latent_loss(self, log_det):
