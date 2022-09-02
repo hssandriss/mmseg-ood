@@ -178,27 +178,27 @@ def single_gpu_test(model,
             result = dataset.format_results(result, indices=batch_indices, **format_args)
 
         if pre_eval:
-            # # TODO: adapt samples_per_gpu > 1.
-            # # only samples_per_gpu=1 valid now
-            # # For originally included metrics mIOU
-            # result_seg = dataset.pre_eval(result, indices=batch_indices)[0]
-            # # For added metrics OOD, calibration
-            # if not model.module.decode_head.use_bags:
-            #     if model.module.decode_head.loss_decode.loss_name.startswith("loss_edl"):
-            #         # For EDL probs
-            #         seg_evidence = model.module.decode_head.loss_decode.logit2evidence(seg_logit) + 1
-            #         seg_evidence = seg_evidence**2 if model.module.decode_head.loss_decode.pow_alpha else seg_evidence
-            #         result_oth = dataset.pre_eval_custom(seg_evidence, seg_gt, "edl")
-            #     else:
-            #         # For softmax probs
-            #         result_oth = dataset.pre_eval_custom(seg_logit, seg_gt, "softmax")
-            # else:
-            #     result_oth = dataset.pre_eval_custom(seg_evidence, seg_gt, "softmax",
-            #                                          model.module.decode_head.use_bags,
-            #                                          model.module.decode_head.bags_kwargs)
-            # result = [(result_seg, result_oth)]
-            # results.extend(result)
-            pass
+            # TODO: adapt samples_per_gpu > 1.
+            # only samples_per_gpu=1 valid now
+            # For originally included metrics mIOU
+            result_seg = dataset.pre_eval(result, indices=batch_indices)[0]
+            # For added metrics OOD, calibration
+            if not model.module.decode_head.use_bags:
+                if model.module.decode_head.loss_decode.loss_name.startswith("loss_edl"):
+                    # For EDL probs
+                    seg_evidence = model.module.decode_head.loss_decode.logit2evidence(seg_logit) + 1
+                    seg_evidence = seg_evidence**2 if model.module.decode_head.loss_decode.pow_alpha else seg_evidence
+                    result_oth = dataset.pre_eval_custom(seg_evidence, seg_gt, "edl")
+                else:
+                    # For softmax probs
+                    result_oth = dataset.pre_eval_custom(seg_logit, seg_gt, "softmax")
+            else:
+                result_oth = dataset.pre_eval_custom(seg_evidence, seg_gt, "softmax",
+                                                     model.module.decode_head.use_bags,
+                                                     model.module.decode_head.bags_kwargs)
+            result = [(result_seg, result_oth)]
+            results.extend(result)
+            # pass
         else:
             results.extend(result)
 

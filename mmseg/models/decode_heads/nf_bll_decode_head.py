@@ -133,9 +133,11 @@ class NfBllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
     def update_z0_params(self):
         """
         To run after loading weights
+        It initializes the base distribution as a gaussian aroud previous MAP solution
         """
-        self.initial_p = torch.cat([self.conv_seg.weight.reshape(-1), self.conv_seg.bias.reshape(-1)]).detach()
-        self.density_estimation.mean = self.initial_p
+        initial_z = torch.cat([self.conv_seg.weight.reshape(-1), self.conv_seg.bias.reshape(-1)]).detach()
+        self.density_estimation.z0_mean = nn.Parameter(initial_z.data, requires_grad=False).cuda().contiguous()
+        self.density_estimation.base_dist = tdist.MultivariateNormal(self.density_estimation.z0_mean, self.density_estimation.z0_cov)
 
     def conv_seg_forward(self, x, z):
         z_list = torch.split(z, 1, 0)
@@ -262,7 +264,8 @@ class NfBllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         Returns:
             Tensor: Output segmentation map.
         """
-        seg_logits, _ = self.forward(inputs, 50)
+        seg_logits, _ = self.forward(inputs, 1)
+        import ipdb; ipdb.set_trace()
         return seg_logits
 
     def cls_seg(self, feat, z):
@@ -326,8 +329,8 @@ class NormalizingFlowDensity(nn.Module):
         self.flow_type = flow_type
 
         # Base gaussian distribution
-        self.z0_mean = nn.Parameter(torch.zeros(self.dim), requires_grad=False)
-        self.z0_cov = nn.Parameter(torch.eye(self.dim), requires_grad=False)
+        self.z0_mean = nn.Parameter(torch.zeros(self.dim), requires_grad=False).cuda().contiguous()
+        self.z0_cov = nn.Parameter(torch.eye(self.dim), requires_grad=False).cuda().contiguous()
         self.base_dist = tdist.MultivariateNormal(self.z0_mean, self.z0_cov)
         if self.flow_type == 'radial_flow':
             self.transforms = nn.Sequential(*(
@@ -359,7 +362,7 @@ class NormalizingFlowDensity(nn.Module):
         return log_prob_x
 
     def sample_base(self, n):
-        import ipdb; ipdb.set_trace()
+        # import ipdb; ipdb.set_trace()
         return self.base_dist.sample([n])
 
     # def latent_loss(self, log_det):
