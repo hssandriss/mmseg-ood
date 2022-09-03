@@ -123,7 +123,10 @@ class NfBllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         self.nsamples_train = nsamples_train
         self.nsamples_test = 1
         if self.flow_type in ('iaf_flow', 'planar_flow', 'radial_flow'):
-            self.density_estimation = NormalizingFlowDensity(dim=self.latent_dim, flow_length=self.flow_length, flow_type=self.flow_type)
+            self.density_estimation = NormalizingFlowDensity(
+                dim=self.latent_dim,
+                flow_length=self.flow_length,
+                flow_type=self.flow_type)
         else:
             raise NotImplementedError
         self.w_shape, self.b_shape = self.conv_seg.weight.shape, self.conv_seg.bias.shape
@@ -136,7 +139,7 @@ class NfBllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         It initializes the base distribution as a gaussian aroud previous MAP solution
         """
         initial_z = torch.cat([self.conv_seg.weight.reshape(-1), self.conv_seg.bias.reshape(-1)]).detach()
-        self.density_estimation.z0_mean = nn.Parameter(initial_z.data, requires_grad=False).cuda().contiguous()
+        self.density_estimation.z0_mean = nn.Parameter(initial_z.data, requires_grad=False)
         self.density_estimation.base_dist = tdist.MultivariateNormal(self.density_estimation.z0_mean, self.density_estimation.z0_cov)
 
     def conv_seg_forward(self, x, z):
@@ -146,10 +149,6 @@ class NfBllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
             z_ = z_.squeeze()
             output.append(F.conv2d(input=x, weight=z_[:self.w_numel].reshape(self.w_shape), bias=z_[-self.b_numel:].reshape(self.b_shape)))
         return torch.cat(output, dim=0)
-        # # import ipdb; ipdb.set_trace()
-        # assert z.shape[0] == 1
-        # z_ = z.squeeze()
-        # return F.conv2d(input=x, weight=z_[:self.w_numel].reshape(self.w_shape), bias=z_[-self.b_numel:].reshape(self.b_shape))
 
     def extra_repr(self):
         """Extra repr."""
@@ -265,7 +264,7 @@ class NfBllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
             Tensor: Output segmentation map.
         """
         seg_logits, _ = self.forward(inputs, 1)
-        import ipdb; ipdb.set_trace()
+
         return seg_logits
 
     def cls_seg(self, feat, z):
@@ -301,13 +300,12 @@ class NfBllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         for loss_decode in losses_decode:
             if loss_decode.loss_name not in loss:
                 loss[loss_decode.loss_name] = loss_decode(seg_logit, seg_label, ignore_index=self.ignore_index) - sum_log_jacobians.mean()
+                loss['mean_jacobian_logdet'] = sum_log_jacobians.mean().detach()
                 if loss_decode.loss_name.startswith("loss_edl"):
                     # load
                     logs = loss_decode.get_logs(seg_logit,
                                                 seg_label,
                                                 self.ignore_index)
-                    logs['mean_jacobian_logdet'] = sum_log_jacobians.mean().detach()
-                    # import ipdb; ipdb.set_trace()
                     loss.update(logs)
             else:
                 loss[loss_decode.loss_name] += loss_decode(
@@ -329,9 +327,11 @@ class NormalizingFlowDensity(nn.Module):
         self.flow_type = flow_type
 
         # Base gaussian distribution
-        self.z0_mean = nn.Parameter(torch.zeros(self.dim), requires_grad=False).cuda().contiguous()
-        self.z0_cov = nn.Parameter(torch.eye(self.dim), requires_grad=False).cuda().contiguous()
+        self.z0_mean = nn.Parameter(torch.zeros(self.dim), requires_grad=False)
+        self.z0_cov = nn.Parameter(torch.eye(self.dim), requires_grad=False)
         self.base_dist = tdist.MultivariateNormal(self.z0_mean, self.z0_cov)
+
+        # build the flow sequence
         if self.flow_type == 'radial_flow':
             self.transforms = nn.Sequential(*(
                 Radial(dim) for _ in range(flow_length)
@@ -353,6 +353,10 @@ class NormalizingFlowDensity(nn.Module):
             z_next = transform(z)
             sum_log_jacobians = sum_log_jacobians + transform.log_abs_det_jacobian(z, z_next)
             z = z_next
+        # import numpy as np
+        # with open('z_samples.npy', 'wb') as f:
+        #     np.save(f, z.detach().cpu().numpy())
+        # import ipdb; ipdb.set_trace()
         return z, sum_log_jacobians
 
     def log_prob(self, x):
@@ -362,8 +366,8 @@ class NormalizingFlowDensity(nn.Module):
         return log_prob_x
 
     def sample_base(self, n):
-        # import ipdb; ipdb.set_trace()
-        return self.base_dist.sample([n])
+        device = next(self.parameters()).device
+        return self.base_dist.sample([n]).to(device)
 
     # def latent_loss(self, log_det):
     #     """Computes KL loss.
