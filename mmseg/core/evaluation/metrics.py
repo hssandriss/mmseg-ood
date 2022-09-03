@@ -349,24 +349,35 @@ def pre_eval_to_metrics(pre_eval_results,
     ret_metrics["aBrierScore"] = np.asarray(calib_metrics[3], dtype=np.float32)
     ret_metrics["aCorrMaxprobU"] = np.asarray(calib_metrics[4], dtype=np.float32)
     if pre_ood_valid.any():
-        ood_metrics = pre_ood_metrics.sum(0) / pre_ood_valid.sum()
+        ood_metrics = pre_ood_metrics[pre_ood_valid, :].mean(0)
+
+        # Regular metrics
         ret_metrics["max_prob.auroc"] = np.asarray(ood_metrics[0], dtype=np.float32)
         ret_metrics["max_prob.aupr"] = np.asarray(ood_metrics[1], dtype=np.float32)
         ret_metrics["max_prob.fpr95"] = np.asarray(ood_metrics[2], dtype=np.float32)
 
-        ret_metrics["u.auroc"] = np.asarray(ood_metrics[3], dtype=np.float32)
-        ret_metrics["u.aupr"] = np.asarray(ood_metrics[4], dtype=np.float32)
-        ret_metrics["u.fpr95"] = np.asarray(ood_metrics[5], dtype=np.float32)
+        ret_metrics["max_logit.auroc"] = np.asarray(ood_metrics[3], dtype=np.float32)
+        ret_metrics["max_logit.aupr"] = np.asarray(ood_metrics[4], dtype=np.float32)
+        ret_metrics["max_logit.fpr95"] = np.asarray(ood_metrics[5], dtype=np.float32)
 
-        ret_metrics["max_logit.auroc"] = np.asarray(ood_metrics[6], dtype=np.float32)
-        ret_metrics["max_logit.aupr"] = np.asarray(ood_metrics[7], dtype=np.float32)
-        ret_metrics["max_logit.fpr95"] = np.asarray(ood_metrics[8], dtype=np.float32)
+        ret_metrics["emp_entropy.auroc"] = np.asarray(ood_metrics[6], dtype=np.float32)
+        ret_metrics["emp_entropy.aupr"] = np.asarray(ood_metrics[7], dtype=np.float32)
+        ret_metrics["emp_entropy.fpr95"] = np.asarray(ood_metrics[8], dtype=np.float32)
 
-        ret_metrics["entropy.auroc"] = np.asarray(ood_metrics[9], dtype=np.float32)
-        ret_metrics["entropy.aupr"] = np.asarray(ood_metrics[10], dtype=np.float32)
-        ret_metrics["entropy.fpr95"] = np.asarray(ood_metrics[11], dtype=np.float32)
+        # SL metrics
+        ret_metrics["u.auroc"] = np.asarray(ood_metrics[9], dtype=np.float32)
+        ret_metrics["u.aupr"] = np.asarray(ood_metrics[10], dtype=np.float32)
+        ret_metrics["u.fpr95"] = np.asarray(ood_metrics[11], dtype=np.float32)
 
-        ret_metrics["ood_corr_max_prob_u"] = np.asarray(ood_metrics[12], dtype=np.float32)
+        ret_metrics["disonnance.auroc"] = np.asarray(ood_metrics[12], dtype=np.float32)
+        ret_metrics["disonnance.aupr"] = np.asarray(ood_metrics[13], dtype=np.float32)
+        ret_metrics["disonnance.fpr95"] = np.asarray(ood_metrics[14], dtype=np.float32)
+
+        ret_metrics["dir_entropy.auroc"] = np.asarray(ood_metrics[15], dtype=np.float32)
+        ret_metrics["dir_entropy.aupr"] = np.asarray(ood_metrics[16], dtype=np.float32)
+        ret_metrics["dir_entropy.fpr95"] = np.asarray(ood_metrics[17], dtype=np.float32)
+
+        ret_metrics["ood_corr_max_prob_u"] = np.asarray(ood_metrics[18], dtype=np.float32)
     return ret_metrics
 
 

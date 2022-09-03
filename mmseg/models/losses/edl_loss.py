@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from ..builder import LOSSES
+from ...utils import diss
 import torchmetrics
 from mmcv.utils import print_log
 import numpy as np
@@ -11,6 +12,11 @@ EPS = 1e-9
 def relu_evidence(logits):
     # This function to generate evidence is used for the first example
     return F.relu(logits)
+
+
+def elu_evidence(logits):
+    # This function to generate evidence is used for the first example
+    return F.elu(logits) + 1
 
 
 def sigmoid_evidence(logits):
@@ -161,7 +167,8 @@ class EDLLoss(nn.Module):
             self.logit2evidence = softplus_evidence
         elif logit2evidence == "relu":
             self.logit2evidence = relu_evidence
-
+        elif logit2evidence == "elu":
+            self.logit2evidence = elu_evidence
         else:
             raise KeyError(logit2evidence)
         self.regularization = regularization
@@ -349,6 +356,7 @@ class EDLLoss(nn.Module):
 
         logs["avg_max_prob"] = (max_prob * ~mask_ignore).sum() / ((~mask_ignore).sum() + EPS)
         logs["avg_uncertainty"] = (u * ~mask_ignore).sum() / ((~mask_ignore).sum() + EPS)
+        # logs["avg_diss"] = (diss(alpha) * ~mask_ignore).sum() / ((~mask_ignore).sum() + EPS)
         logs["acc_seg"] = succ.sum() / (fail.sum() + succ.sum()) * 100
 
         max_prob_flat = max_prob.permute(1, 0, 2, 3).flatten(1, -1).squeeze()

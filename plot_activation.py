@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import torch
 EPS = 1e-5
-logits = torch.arange(-100., 100., 0.01)
+logits = torch.arange(-500., 500., 0.01)
 # logits.requires_grad = True
 
 
@@ -19,11 +19,13 @@ def exp(logits):
 
 # output = 1. / (torch.exp(-1 * logits) + EPS)
 fig = plt.figure()
-
+f = torch.nn.functional.elu(logits)
 # plt.plot(logits, 1. / (torch.exp(-.1 * logits) + EPS), label="inv_.1", color='b')
-plt.plot(logits, torch.exp(logits), label="regular", color='g')
-plt.plot(logits, exp(logits), label="inv", color='r')
-plt.plot(logits, (torch.abs(logits) + 1)**1.5, label="inv", color='k')
-plt.axis([None, None, -1, 500])
+# plt.plot(logits, torch.exp(logits), label="regular", color='g')
+# plt.plot(logits, exp(logits), label="inv", color='r')
+import ipdb; ipdb.set_trace()
+plt.plot(logits, f, color='teal')
+# plt.plot(logits, (torch.abs(logits) + 1)**1.5, label="inv", color='k')
+plt.axis([None, None, -5, 500])
 plt.savefig("exp_eps_jj.png", dpi=300)
 # import ipdb; ipdb.set_trace()

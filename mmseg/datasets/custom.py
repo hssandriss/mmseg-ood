@@ -16,7 +16,7 @@ from .pipelines import Compose, LoadAnnotations
 import torch.nn.functional as F
 import torch
 from torchmetrics.functional import calibration_error, pearson_corrcoef
-from ..utils import brierscore
+from ..utils import brierscore, diss
 
 
 @DATASETS.register_module()
@@ -288,6 +288,8 @@ class CustomDataset(Dataset):
             yield results['gt_semantic_seg']
 
     def pre_eval_custom(self, seg_logit, seg_gt, logit2prob="softmax", use_bags=False, bags_kwargs={}):
+        NA = np.nan  # value when metric is not used
+
         seg_logit = seg_logit.cpu()
         num_cls = seg_logit.shape[1]
 
@@ -300,24 +302,30 @@ class CustomDataset(Dataset):
 
         if not use_bags:
             if logit2prob == "edl":
+                # With EDL we can use two three more measures of of uncertainty on prob.
+                # - Vacuity (uncertainty due to a lack of evidence)
+                # - Dissonance (uncertainty due to conflicting evidence).
                 alpha = seg_logit_flat
                 strength = alpha.sum(dim=1, keepdim=True)
                 u = num_cls / strength
+                dissonance = diss(alpha)
                 probs = alpha / strength
-                # seg_max_prob = 1 - u
                 seg_max_prob = probs.max(dim=1)[0]
                 seg_max_logit = seg_logit_flat.max(dim=1)[0]
-                seg_entropy = - (probs * probs.log()).sum(1)
-                seg_entropy = (torch.lgamma(alpha).sum(1, keepdim=True) - torch.lgamma(strength) -
-                               (num_cls - strength) * torch.digamma(strength) -
-                               ((alpha - 1.0) * torch.digamma(alpha)).sum(1, keepdim=True))
                 seg_u = u.squeeze()
+                seg_emp_entropy = - (probs * probs.log()).sum(1)
+                seg_dir_entropy = (torch.lgamma(alpha).sum(1, keepdim=True) - torch.lgamma(strength) -
+                                   (num_cls - strength) * torch.digamma(strength) -
+                                   ((alpha - 1.0) * torch.digamma(alpha)).sum(1, keepdim=True))
+                seg_dissonance = dissonance.squeeze()
             else:
                 probs = F.softmax(seg_logit_flat, dim=1)
                 seg_max_prob = probs.max(dim=1)[0]
                 seg_max_logit = seg_logit_flat.max(dim=1)[0]
-                seg_entropy = - (probs * probs.log()).sum(1)
-                seg_u = torch.ones_like(seg_max_prob) - seg_max_prob
+                seg_emp_entropy = - (probs * probs.log()).sum(1)
+                seg_u = torch.full(size=seg_max_prob.shape, fill_value=NA)
+                seg_dir_entropy = torch.full(size=seg_max_prob.shape, fill_value=NA)
+                seg_dissonance = torch.full(size=seg_max_prob.shape, fill_value=NA)
             # seg_pred_all_other = torch.zeros_like(seg_logit_flat, dtype=torch.bool)
         else:
             assert 'num_bags' in bags_kwargs and 'bag_masks' in bags_kwargs
@@ -340,8 +348,12 @@ class CustomDataset(Dataset):
                 logits[:, mask] = bag_seg_logit_no_other
             seg_max_prob = probs.max(dim=1)[0]
             seg_max_logit = logits.max(dim=1)[0]
-            seg_entropy = seg_pred_entropy / bags_kwargs["num_bags"]
+            seg_emp_entropy = seg_pred_entropy / bags_kwargs["num_bags"]
+            seg_u = torch.full(size=seg_max_prob.shape, fill_value=NA)
+            seg_dir_entropy = torch.full(size=seg_max_prob.shape, fill_value=NA)
+            seg_dissonance = torch.full(size=seg_max_prob.shape, fill_value=NA)
             # seg_pred_all_other = is_other.all(1, True)
+
         # Compute OOD metrics for openset
         if hasattr(self, "ood_indices"):
             ood_mask = (seg_gt_tensor_flat == self.ood_indices[0])
@@ -351,49 +363,66 @@ class CustomDataset(Dataset):
                 auroc_prob, aupr_prob, fpr_prob = self.evaluate_ood(out_scores_probs, in_scores_probs)
                 probs_ood = np.array([auroc_prob, aupr_prob, fpr_prob])
 
-                out_scores_u, in_scores_u = self.get_in_out_conf(seg_u.cpu().numpy(), seg_gt_tensor_flat.cpu().numpy(), "u")
-                auroc_u, aupr_u, fpr_u = self.evaluate_ood(out_scores_u, in_scores_u)
-                u_ood = np.array([auroc_u, aupr_u, fpr_u])
-
                 out_scores_logit, in_scores_logit = self.get_in_out_conf(seg_max_logit.cpu().numpy(), seg_gt_tensor_flat.cpu().numpy(), "max_logit")
                 auroc_logit, aupr_logit, fpr_logit = self.evaluate_ood(out_scores_logit, in_scores_logit)
                 logit_ood = np.array([auroc_logit, aupr_logit, fpr_logit])
 
-                out_scores_entropy, in_scores_entropy = self.get_in_out_conf(seg_entropy.cpu().numpy(), seg_gt_tensor_flat.cpu().numpy(), "entropy")
-                auroc_entropy, aupr_entropy, fpr_entropy = self.evaluate_ood(out_scores_entropy, in_scores_entropy)
-                entropy_ood = np.array([auroc_entropy, aupr_entropy, fpr_entropy])
+                out_scores_emp_entr, in_scores_emp_entr = self.get_in_out_conf(
+                    seg_emp_entropy.cpu().numpy(), seg_gt_tensor_flat.cpu().numpy(), "entropy")
+                auroc_emp_entr, aupr_emp_entropy, fpr_emp_entropy = self.evaluate_ood(out_scores_emp_entr, in_scores_emp_entr)
+                emp_entr_ood = np.array([auroc_emp_entr, aupr_emp_entropy, fpr_emp_entropy])
+
+                if logit2prob == "edl":
+                    out_scores_diss, in_scores_diss = self.get_in_out_conf(
+                        seg_dissonance.cpu().numpy(), seg_gt_tensor_flat.cpu().numpy(), "dissonance")
+                    auroc_diss, aupr_diss, fpr_diss = self.evaluate_ood(out_scores_diss, in_scores_diss)
+                    dissonance_ood = np.array([auroc_diss, aupr_diss, fpr_diss])
+
+                    out_scores_u, in_scores_u = self.get_in_out_conf(seg_u.cpu().numpy(), seg_gt_tensor_flat.cpu().numpy(), "vacuity")
+                    auroc_u, aupr_u, fpr_u = self.evaluate_ood(out_scores_u, in_scores_u)
+                    u_ood = np.array([auroc_u, aupr_u, fpr_u])
+
+                    out_scores_dir_entr, in_scores_dir_entr = self.get_in_out_conf(
+                        seg_dir_entropy.cpu().numpy(), seg_gt_tensor_flat.cpu().numpy(), "entropy")
+                    auroc_dir_entr, aupr_dir_entr, fpr_dir_entr = self.evaluate_ood(out_scores_dir_entr, in_scores_dir_entr)
+                    dir_entr_ood = np.array([auroc_dir_entr, aupr_dir_entr, fpr_dir_entr])
+                else:
+                    dissonance_ood = np.array([NA, NA, NA])
+                    u_ood = np.array([NA, NA, NA])
+                    dir_entr_ood = np.array([NA, NA, NA])
 
                 corr_max_prob_u = np.array([pearson_corrcoef(seg_max_prob, seg_u)])
-
-                ood_metrics = (np.hstack((probs_ood, u_ood, logit_ood, entropy_ood, corr_max_prob_u)), True)
+                ood_metrics = (np.hstack((probs_ood, logit_ood, emp_entr_ood, u_ood, dissonance_ood, dir_entr_ood, corr_max_prob_u)), True)
             else:
-                ood_metrics = (np.array([0. for _ in range(13)]), False)
+                ood_metrics = (np.array([NA for _ in range(6 * 3 + 1)]), False)
         else:
             # Puts nans otherwise
-            ood_metrics = (np.array([0. for _ in range(13)]), False)
+            ood_metrics = (np.array([NA for _ in range(6 * 3 + 1)]), False)
 
         # Calibration/Confidence metrics for closed set
         if not hasattr(self, "ood_indices") or self.mixed:
             if self.ignore_index:
+                # filtered out ignored indices
                 seg_gt_tensor_flat_no_bg = seg_gt_tensor_flat[~ignore_bg_mask]
                 probs_no_bg = probs[~ignore_bg_mask, :]
-
-            if hasattr(self, "ood_indices"):
-                # import ipdb; ipdb.set_trace()
+            if self.mixed:
+                # filtered out ood indices
                 ood_masker = self.get_ood_masker(seg_gt_tensor_flat_no_bg)
-                # import ipdb; ipdb.set_trace()
                 probs_no_bg = probs_no_bg[ood_masker]
                 seg_gt_tensor_flat_no_bg = seg_gt_tensor_flat_no_bg[ood_masker]
             nll = F.nll_loss(probs_no_bg.log(), seg_gt_tensor_flat_no_bg, reduction='mean').item()
             ece_l1 = calibration_error(probs_no_bg, seg_gt_tensor_flat_no_bg, norm='l1', ).item()
             ece_l2 = calibration_error(probs_no_bg, seg_gt_tensor_flat_no_bg, norm='l2').item()
             brier = brierscore(probs_no_bg, seg_gt_tensor_flat_no_bg, reduction="mean").item()
-            corr_max_prob_u = pearson_corrcoef(seg_max_prob, seg_u).item()
+            if logit2prob == "edl":
+                corr_max_prob_u = pearson_corrcoef(seg_max_prob, seg_u).item()
+            else:
+                corr_max_prob_u = np.nan
             calib_metrics = np.array([nll, ece_l1, ece_l2, brier, corr_max_prob_u])
 
-            per_cls_prob = [0. for _ in range(num_cls)]
-            per_cls_u = [0. for _ in range(num_cls)]
-            per_cls_strength = [0. for _ in range(num_cls)]
+            per_cls_prob = [NA for _ in range(num_cls)]
+            per_cls_u = [NA for _ in range(num_cls)]
+            per_cls_strength = [NA for _ in range(num_cls)]
 
             for c in range(num_cls):
                 mask_cls = (seg_gt_tensor_flat == c)
@@ -408,10 +437,10 @@ class CustomDataset(Dataset):
             per_cls_strength = np.array(per_cls_strength)
             per_cls_conf_metrics = (per_cls_prob, per_cls_u, per_cls_strength)
         else:
-            calib_metrics = np.array([0 for _ in range(5)])
-            per_cls_prob = np.array([0. for _ in range(num_cls)])
-            per_cls_u = np.array([0. for _ in range(num_cls)])
-            per_cls_strength = np.array([0. for _ in range(num_cls)])
+            calib_metrics = np.array([NA for _ in range(5)])
+            per_cls_prob = np.array([NA for _ in range(num_cls)])
+            per_cls_u = np.array([NA for _ in range(num_cls)])
+            per_cls_strength = np.array([NA for _ in range(num_cls)])
             per_cls_conf_metrics = (per_cls_prob, per_cls_u, per_cls_strength)
 
         return (ood_metrics, calib_metrics, per_cls_conf_metrics)
@@ -558,7 +587,9 @@ class CustomDataset(Dataset):
         allowed_metrics = ['mIoU', 'mDice', 'mFscore']
         if not set(metric).issubset(set(allowed_metrics)):
             raise KeyError('metric {} is not supported'.format(metric))
-
+        sl_ood_valid = True
+        reg_ood_valid = True
+        in_dist_valid = True
         eval_results = {}
         # test a list of files
         if mmcv.is_list_of(results, np.ndarray) or mmcv.is_list_of(results, str):
@@ -584,9 +615,10 @@ class CustomDataset(Dataset):
             class_names = self.CLASSES
 
         # summary table
+        default_metrics = ('aAcc', 'IoU', 'Acc', 'Fscore', 'Precision', 'Recall', 'Dice')
         ret_metrics_summary = OrderedDict({
             ret_metric: np.round(np.nanmean(ret_metric_value) * 100, 2)
-            if ret_metric in ('aAcc', 'IoU', 'Acc', 'Fscore', 'Precison', 'Recall', 'Dice')  # percentage metrics
+            if ret_metric in default_metrics  # percentage metrics
             else np.round(np.nanmean(ret_metric_value), 2)  # other metrics
             for ret_metric, ret_metric_value in ret_metrics.items()
         })
@@ -598,15 +630,22 @@ class CustomDataset(Dataset):
         ret_metrics.pop('aBrierScore', None)
         ret_metrics.pop('aBrierScore', None)
         ret_metrics.pop("aCorrMaxprobU", None)
-        ood_metrics = [f"{a}.{b}" for a in ("max_prob", "u", "max_logit", "entropy") for b in ("auroc", "aupr", "fpr95")] + ["ood_corr_max_prob_u"]
+        regular_ood_metrics = [f"{a}.{b}" for a in ("max_prob", "max_logit", "emp_entropy") for b in ("auroc", "aupr", "fpr95")]
+        sl_ood_metrics = [f"{a}.{b}" for a in ("u", "disonnance", "dir_entropy") for b in ("auroc", "aupr", "fpr95")] + ["ood_corr_max_prob_u"]
         # remove ood metrics ret_metrics_summary
-        for k in ood_metrics:
+        for k in regular_ood_metrics:
+            ret_metrics_summary.pop(k, None)
+        regular_ood_metrics_summary = OrderedDict({ret_metric: np.round(np.nanmean(ret_metric_value), 2)
+                                                   for ret_metric, ret_metric_value in ret_metrics.items() if ret_metric in regular_ood_metrics})
+        for ret_metric in regular_ood_metrics:
+            ret_metrics.pop(ret_metric, None)
+
+        for k in sl_ood_metrics:
             ret_metrics_summary.pop(k, None)
 
-        ood_metrics_summary = OrderedDict({ret_metric: np.round(np.nanmean(ret_metric_value), 2)
-                                          for ret_metric, ret_metric_value in ret_metrics.items() if ret_metric in ood_metrics})
-
-        for ret_metric in ood_metrics:
+        sl_ood_metrics_summary = OrderedDict({ret_metric: np.round(np.nanmean(ret_metric_value), 2)
+                                              for ret_metric, ret_metric_value in ret_metrics.items() if ret_metric in sl_ood_metrics})
+        for ret_metric in sl_ood_metrics:
             ret_metrics.pop(ret_metric, None)
 
         ret_metrics_class = OrderedDict({
@@ -617,6 +656,10 @@ class CustomDataset(Dataset):
         })
         ret_metrics_class.update({'Class': class_names})
         ret_metrics_class.move_to_end('Class', last=False)
+        # valid update
+        in_dist_valid = all([not np.isnan(v) for k, v in ret_metrics_summary.items() if k not in default_metrics])
+        reg_ood_valid = all([not np.isnan(v) for v in regular_ood_metrics_summary.values()])
+        sl_ood_valid = all([not np.isnan(v) for v in sl_ood_metrics_summary.values()])
         # for logger
         class_table_data = PrettyTable()
         for key, val in ret_metrics_class.items():
@@ -627,31 +670,45 @@ class CustomDataset(Dataset):
                 summary_table_data.add_column(key, [val])
             else:
                 summary_table_data.add_column('m' + key, [val])
-        ood_table_data = PrettyTable()
-        for key, val in ood_metrics_summary.items():
-            ood_table_data.add_column(key, [val])
-        if not('roadanomaly' in str(type(self)).lower()):
-            print_log('per class results:', logger)
-            print_log('\n' + class_table_data.get_string(), logger=logger)
-            print_log('Summary:', logger)
-            print_log('\n' + summary_table_data.get_string(), logger=logger)
-        print_log('OOD:', logger)
-        if len(ood_metrics_summary):
-            print_log('\n' + ood_table_data.get_string(), logger=logger)
-        else:
-            print_log("No image w/ OOD objects or all images have just OOD objects", logger)
+        regular_ood_table_data = PrettyTable()
+        for key, val in regular_ood_metrics_summary.items():
+            regular_ood_table_data.add_column(key, [val])
+        sl_ood_table_data = PrettyTable()
+        for key, val in sl_ood_metrics_summary.items():
+            sl_ood_table_data.add_column(key, [val])
 
-        for key, value in ret_metrics_summary.items():
-            if key in ('aAcc', 'aNll', 'aEce1', 'aEce2', 'aBrierScore', 'aCorrMaxprobU'):
-                eval_results[key] = value
+        if in_dist_valid:
+            print_log('\nPer class results:', logger)
+            print_log(class_table_data.get_string(), logger=logger)
+            print_log('\nSummary:', logger)
+            print_log(summary_table_data.get_string(), logger=logger)
+
+            for key, value in ret_metrics_summary.items():
+                if key in ('aAcc', 'aNll', 'aEce1', 'aEce2', 'aBrierScore', 'aCorrMaxprobU'):
+                    eval_results[key] = value
+                else:
+                    eval_results['m' + key] = value
+                ret_metrics_class.pop('Class', None)
+            for key, value in ret_metrics_class.items():
+                eval_results.update({
+                    key + '.' + str(name): value[idx]
+                    for idx, name in enumerate(class_names)
+                })
+        if reg_ood_valid:
+            print_log('\nRegular OOD:', logger)
+            if len(regular_ood_metrics_summary):
+                print_log(regular_ood_table_data.get_string(), logger=logger)
             else:
-                eval_results['m' + key] = value
-        ret_metrics_class.pop('Class', None)
-        for key, value in ret_metrics_class.items():
-            eval_results.update({
-                key + '.' + str(name): value[idx]
-                for idx, name in enumerate(class_names)
-            })
-        for key, value in ood_metrics_summary.items():
-            eval_results[key] = value
-        return eval_results
+                print_log("No image w/ OOD objects or all images have just OOD objects", logger)
+            for key, value in regular_ood_metrics_summary.items():
+                eval_results[key] = value
+        if sl_ood_valid:
+            print_log('\nSL OOD:', logger)
+            if len(sl_ood_metrics_summary):
+                print_log(sl_ood_table_data.get_string(), logger=logger)
+            else:
+                print_log("No image w/ OOD objects or all images have just OOD objects", logger)
+            for key, value in sl_ood_metrics_summary.items():
+                eval_results[key] = value
+
+        return eval_results, (in_dist_valid, reg_ood_valid, sl_ood_valid)
