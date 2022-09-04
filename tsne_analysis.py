@@ -1,7 +1,7 @@
 import numpy as np
 from sklearn.manifold import TSNE
 import plotly.express as px
-data_path = '1000_z_samples_2xradial.npy'
+data_path = '1000_z_samples_2xplanar.npy'
 with open(data_path, 'rb') as f:
     data = np.load(f)
 suffixe = data_path.split('.')[0]
