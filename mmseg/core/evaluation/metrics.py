@@ -323,10 +323,11 @@ def pre_eval_to_metrics(pre_eval_results,
     pre_ood_valid = np.array(pre_ood_valid)
     pre_ood_metrics = np.vstack(pre_ood_metrics)
     pre_calib_metrics = np.vstack(oth_pre_eval_results[1])
-    pre_cls_conf, pre_cls_u, pre_cls_strength = tuple(zip(*oth_pre_eval_results[2]))
+    pre_cls_conf, pre_cls_u, pre_cls_strength, pre_cls_disonnance = tuple(zip(*oth_pre_eval_results[2]))
     pre_cls_conf = np.vstack(pre_cls_conf)
     pre_cls_u = np.vstack(pre_cls_u)
     pre_cls_strength = np.vstack(pre_cls_strength)
+    pre_cls_disonnance = np.vstack(pre_cls_disonnance)
     assert len(main_pre_eval_results) == 4
 
     total_area_intersect = sum(main_pre_eval_results[0])
@@ -338,10 +339,11 @@ def pre_eval_to_metrics(pre_eval_results,
                                         total_area_pred_label,
                                         total_area_label, metrics, nan_to_num,
                                         beta)
-
-    ret_metrics["Prob"] = (pre_cls_conf.sum(0) / total_area_label).numpy()
-    ret_metrics["U"] = (pre_cls_u.sum(0) / total_area_label).numpy()
-    ret_metrics["S"] = (pre_cls_strength.sum(0) / total_area_label).numpy()
+    # can have nans in some images because of absence of some sematic objects
+    ret_metrics["Prob"] = (np.nansum(pre_cls_conf, 0) / total_area_label).numpy()
+    ret_metrics["U"] = (np.nansum(pre_cls_u, 0) / total_area_label).numpy()
+    ret_metrics["S"] = (np.nansum(pre_cls_strength, 0) / total_area_label).numpy()
+    ret_metrics["Diss"] = (np.nansum(pre_cls_disonnance, 0) / total_area_label).numpy()
     calib_metrics = pre_calib_metrics.mean(0)
     ret_metrics["aNll"] = np.asarray(calib_metrics[0], dtype=np.float32)
     ret_metrics["aEce1"] = np.asarray(calib_metrics[1], dtype=np.float32)
@@ -349,8 +351,7 @@ def pre_eval_to_metrics(pre_eval_results,
     ret_metrics["aBrierScore"] = np.asarray(calib_metrics[3], dtype=np.float32)
     ret_metrics["aCorrMaxprobU"] = np.asarray(calib_metrics[4], dtype=np.float32)
     if pre_ood_valid.any():
-        ood_metrics = pre_ood_metrics[pre_ood_valid, :].mean(0)
-
+        ood_metrics = np.mean(pre_ood_metrics[pre_ood_valid, :], 0)
         # Regular metrics
         ret_metrics["max_prob.auroc"] = np.asarray(ood_metrics[0], dtype=np.float32)
         ret_metrics["max_prob.aupr"] = np.asarray(ood_metrics[1], dtype=np.float32)

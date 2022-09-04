@@ -163,8 +163,7 @@ class CityscapesDataset(CustomDataset):
             metrics.remove('cityscapes')
         if len(metrics) > 0:
             eval_results.update(
-                super(CityscapesDataset,
-                      self).evaluate(results, metrics, logger))
+                super(CityscapesDataset, self).evaluate(results, metrics, logger))
 
         return eval_results
 

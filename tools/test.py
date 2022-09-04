@@ -362,7 +362,7 @@ def main():
                 mmcv.dump(results, args.out)
             if args.eval:
                 eval_kwargs.update(metric=args.eval)
-                metric, (in_dist_valid, reg_ood_valid, sl_ood_valid) = dataset.evaluate(results, **eval_kwargs)
+                metric = dataset.evaluate(results, **eval_kwargs)
                 metric_dict = dict(config=args.config, metric=metric)
                 metric_dict["iter"] = all_checkpoints_iter[i]
                 mmcv.dump(metric_dict, json_file, indent=4)
@@ -370,6 +370,9 @@ def main():
                     # remove tmp dir when cityscapes evaluation
                     shutil.rmtree(tmpdir)
                 curr_res = {}
+                reg_ood_valid = metric_dict.pop('reg_ood_valid', False)
+                sl_ood_valid = metric_dict.pop('sl_ood_valid', False)
+                in_dist_valid = metric_dict.pop('in_dist_valid', False)
                 if reg_ood_valid:
                     curr_iter_reg_ood_df = pd.DataFrame(
                         data=[[all_checkpoints_iter[i],
