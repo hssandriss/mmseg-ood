@@ -73,8 +73,11 @@ def mse_edl_loss(one_hot_gt, alpha, num_classes):
     # L_var
     B = torch.sum(alpha * (strength - alpha) / (strength * strength * (strength + 1)), dim=1, keepdim=True)
     # L_KL
+    _, pred_cls = torch.max(alpha / strength, 1, keepdim=True)
+    _, target = torch.max(one_hot_gt, 1, keepdim=True)
+    accurate_match = torch.eq(pred_cls, target).float()
     alpha_kl = (alpha - 1) * (1 - one_hot_gt) + 1
-    C = KL(alpha_kl, num_classes)
+    C = (1 - accurate_match) * KL(alpha_kl, num_classes)
     # L_EUC
     D, E = EUC(alpha, one_hot_gt, num_classes)
     return A, B, C, D, E
@@ -94,8 +97,14 @@ def ce_edl_loss(one_hot_gt, alpha, num_classes, func, bis=False, with_var=False,
         A = A + 0.001 * strength
 
     # L_kl
+    # TODO: Apply just for inaccurate
+    alpha_kl = alpha * (1 - one_hot_gt) + one_hot_gt
+    _, pred_cls = torch.max(alpha / strength, 1, keepdim=True)
+    _, target = torch.max(one_hot_gt, 1, keepdim=True)
+    accurate_match = torch.eq(pred_cls, target).float()
     alpha_kl = (alpha - 1) * (1 - one_hot_gt) + 1
-    C = KL(alpha_kl, num_classes)
+    C = (1 - accurate_match) * KL(alpha_kl, num_classes)
+    # C = KL(alpha_kl, num_classes)
     # L_EUC
     D, E = EUC(alpha, one_hot_gt, num_classes)
 
@@ -104,6 +113,7 @@ def ce_edl_loss(one_hot_gt, alpha, num_classes, func, bis=False, with_var=False,
 
 def KL(alpha, num_classes):
     beta = torch.ones((1, num_classes, 1, 1), dtype=torch.float32, device=alpha.device)  # uncertain dir
+
     strength_alpha = torch.sum(alpha, dim=1, keepdim=True)
     strength_beta = torch.sum(beta, dim=1, keepdim=True)
 
@@ -137,6 +147,8 @@ def lam(epoch_num, total_epochs, annealing_start, annealing_step, annealing_meth
         annealing_coef = annealing_start * torch.exp(-torch.log(annealing_start) / (total_epochs - 1) * epoch_num)
     elif annealing_method == 'zero':
         annealing_coef = torch.tensor(0., dtype=torch.float32)
+    elif annealing_method == 'constant':
+        annealing_coef = torch.tensor(1., dtype=torch.float32)
     else:
         raise NotImplementedError
     return annealing_coef
@@ -146,7 +158,7 @@ def lam(epoch_num, total_epochs, annealing_start, annealing_step, annealing_meth
 class EDLLoss(nn.Module):
 
     def __init__(self, num_classes, loss_variant="mse", annealing_step=10, annealing_method="step", annealing_from=1, total_epochs=70,
-                 annealing_start=0.001, logit2evidence="exp", regularization="kld", reduction="mean", loss_weight=1.0, pow_alpha=False,
+                 annealing_start=0.01, logit2evidence="exp", regularization="kld", reduction="mean", loss_weight=1.0, pow_alpha=False,
                  avg_non_ignore=True, loss_name='loss_edl'):
         super(EDLLoss, self).__init__()
         self.reduction = reduction
@@ -179,11 +191,13 @@ class EDLLoss(nn.Module):
 
         self.epoch_num = 0
         self.total_epochs = total_epochs
+        self.temp = np.linspace(10, 0.1, self.total_epochs).tolist()
+        # import ipdb; ipdb.set_trace()
         self.lam_schedule = []
         for epoch in range(self.total_epochs):
             self.lam_schedule.append(lam(epoch, self.total_epochs, self.annealing_start, self.annealing_step, self.annealing_method))
-        if self.annealing_method != 'zero':
-            assert self.lam_schedule[-1].allclose(torch.tensor(1.)), "Please check you schedule!"
+        # if self.annealing_method != 'zero':
+        #     assert self.lam_schedule[-1].allclose(torch.tensor(1.)), "Please check you schedule!"
         self.pow_alpha = pow_alpha
         self.loss_name = "_".join([loss_name, loss_variant])
         # for logging
@@ -195,7 +209,9 @@ class EDLLoss(nn.Module):
         self.epoch_num_ = 0
         self.epoch_nums = []
         self.iter_cnt = 0
+
         print_log(', '.join([f"{i}: {self.lam_schedule[i]:.4f}" for i in range(self.total_epochs)]))
+        print_log(', '.join([f"{i}: {self.temp[i]:.4f}" for i in range(self.total_epochs)]))
 
     def forward(self,
                 pred,
@@ -209,6 +225,7 @@ class EDLLoss(nn.Module):
         if self.epoch_num == self.epoch_num_ + 1 and self.epoch_num > 0:
             if np.mean(self.epoch_nums) % 1 != 0:
                 import ipdb; ipdb.set_trace()
+            print_log(f"Temp: {self.temp[self.epoch_num_]}")
             print_log(f"Lam: {self.lam_schedule[self.epoch_num_]}")
             print_log(f"Epoch {self.epoch_num_} is done with {self.iter_cnt} iterations")
             self.iter_cnt = 0
@@ -218,8 +235,11 @@ class EDLLoss(nn.Module):
         if (evidence != evidence).any():
             # detecting inf or nans
             import ipdb; ipdb.set_trace()
+        # tempering ev
+        evidence = evidence / self.temp[self.epoch_num]
 
         alpha = (evidence + 1)**2 if self.pow_alpha else evidence + 1
+
         target_expanded = target.data.unsqueeze(1).clone()
         mask_ignore = (target_expanded == 255)
         target_expanded[mask_ignore] = 0

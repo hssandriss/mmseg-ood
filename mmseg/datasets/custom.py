@@ -683,9 +683,9 @@ class CustomDataset(Dataset):
             sl_ood_table_data.add_column(key, [val])
 
         if in_dist_valid:
-            print_log('\nPer class results:', logger)
+            print_log('\n' + 'Per class results:', logger)
             print_log('\n' + class_table_data.get_string(), logger=logger)
-            print_log('\nSummary:', logger)
+            print_log('\n' + 'Summary:', logger)
             print_log('\n' + summary_table_data.get_string(), logger=logger)
 
             for key, value in ret_metrics_summary.items():
@@ -702,20 +702,20 @@ class CustomDataset(Dataset):
                 })
             eval_results['in_dist_valid'] = True
         if reg_ood_valid:
-            print_log('\nRegular OOD:', logger)
+            print_log('\n' + 'Regular OOD:', logger)
             if len(regular_ood_metrics_summary):
                 print_log('\n' + regular_ood_table_data.get_string(), logger=logger)
             else:
-                print_log("No image w/ OOD objects or all images have just OOD objects", logger)
+                print_log('\n' + "No image w/ OOD objects or all images have just OOD objects", logger)
             for key, value in regular_ood_metrics_summary.items():
                 eval_results[key] = value
             eval_results['reg_ood_valid'] = True
         if sl_ood_valid:
-            print_log('\nSL OOD:', logger)
+            print_log('\n' + 'SL OOD:', logger)
             if len(sl_ood_metrics_summary):
                 print_log('\n' + sl_ood_table_data.get_string(), logger=logger)
             else:
-                print_log("No image w/ OOD objects or all images have just OOD objects", logger)
+                print_log('\n' + "No image w/ OOD objects or all images have just OOD objects", logger)
             for key, value in sl_ood_metrics_summary.items():
                 eval_results[key] = value
             eval_results['sl_ood_valid'] = True
