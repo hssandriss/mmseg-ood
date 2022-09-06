@@ -102,8 +102,8 @@ def ce_edl_loss(one_hot_gt, alpha, num_classes, func, bis=False, with_var=False,
     _, pred_cls = torch.max(alpha / strength, 1, keepdim=True)
     _, target = torch.max(one_hot_gt, 1, keepdim=True)
     accurate_match = torch.eq(pred_cls, target).float()
-    alpha_kl = (alpha - 1) * (1 - one_hot_gt) + 1
-    C = (1 - accurate_match) * KL(alpha_kl, num_classes)
+    # alpha_kl = (alpha - 1) * (1 - one_hot_gt) + 1
+    C = (1 - accurate_match) * KL(alpha, num_classes)
     # C = KL(alpha_kl, num_classes)
     # L_EUC
     D, E = EUC(alpha, one_hot_gt, num_classes)
