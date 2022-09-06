@@ -142,7 +142,7 @@ def EUC(alpha, one_hot_gt, num_classes):
 def lam(epoch_num, total_epochs, annealing_start, annealing_step, annealing_method):
     if annealing_method == 'step':
         annealing_coef = torch.min(torch.tensor(1.0, dtype=torch.float32), torch.tensor(
-            epoch_num / annealing_step, dtype=torch.float32))
+            max(epoch_num - 10, 0.) / annealing_step, dtype=torch.float32))
     elif annealing_method == 'exp':
         annealing_coef = annealing_start * torch.exp(-torch.log(annealing_start) / (total_epochs - 1) * epoch_num)
     elif annealing_method == 'zero':
@@ -191,7 +191,7 @@ class EDLLoss(nn.Module):
 
         self.epoch_num = 0
         self.total_epochs = total_epochs
-        self.temp = np.linspace(10, 0.1, self.total_epochs).tolist()
+        # self.temp = np.linspace(10, 0.1, self.total_epochs).tolist()
         # import ipdb; ipdb.set_trace()
         self.lam_schedule = []
         for epoch in range(self.total_epochs):
@@ -211,7 +211,7 @@ class EDLLoss(nn.Module):
         self.iter_cnt = 0
 
         print_log(', '.join([f"{i}: {self.lam_schedule[i]:.4f}" for i in range(self.total_epochs)]))
-        print_log(', '.join([f"{i}: {self.temp[i]:.4f}" for i in range(self.total_epochs)]))
+        # print_log(', '.join([f"{i}: {self.temp[i]:.4f}" for i in range(self.total_epochs)]))
 
     def forward(self,
                 pred,
@@ -225,7 +225,7 @@ class EDLLoss(nn.Module):
         if self.epoch_num == self.epoch_num_ + 1 and self.epoch_num > 0:
             if np.mean(self.epoch_nums) % 1 != 0:
                 import ipdb; ipdb.set_trace()
-            print_log(f"Temp: {self.temp[self.epoch_num_]}")
+            # print_log(f"Temp: {self.temp[self.epoch_num_]}")
             print_log(f"Lam: {self.lam_schedule[self.epoch_num_]}")
             print_log(f"Epoch {self.epoch_num_} is done with {self.iter_cnt} iterations")
             self.iter_cnt = 0
@@ -236,7 +236,7 @@ class EDLLoss(nn.Module):
             # detecting inf or nans
             import ipdb; ipdb.set_trace()
         # tempering ev
-        evidence = evidence / self.temp[self.epoch_num]
+        # evidence = evidence / self.temp[self.epoch_num]
 
         alpha = (evidence + 1)**2 if self.pow_alpha else evidence + 1
 
