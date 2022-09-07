@@ -11,6 +11,7 @@ from ..builder import build_loss
 from ..losses import accuracy
 import torch.nn.functional as F
 
+from pyro.distributions.transforms.sylvester import Sylvester
 from pyro.distributions.transforms.planar import Planar
 from pyro.distributions.transforms.radial import Radial
 from pyro.distributions.transforms.affine_autoregressive import affine_autoregressive
@@ -335,6 +336,10 @@ class NormalizingFlowDensity(nn.Module):
         if self.flow_type == 'radial_flow':
             self.transforms = nn.Sequential(*(
                 Radial(dim) for _ in range(flow_length)
+            ))
+        elif self.flow_type == 'sylvester':
+            self.transforms = nn.Sequential(*(
+                Sylvester(dim) for _ in range(flow_length)
             ))
         elif self.flow_type == 'planar_flow':
             self.transforms = nn.Sequential(*(
