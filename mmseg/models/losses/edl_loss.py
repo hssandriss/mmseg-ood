@@ -99,8 +99,7 @@ def ce_edl_loss(one_hot_gt, alpha, num_classes, func, bis=False, with_var=False,
         B = torch.sum(alpha * (strength - alpha) / (strength * strength * (strength + 1)), dim=1, keepdim=True)
         A = A - B
     if reg:
-        import ipdb; ipdb.set_trace()
-        A = A + 0.001 * (strength - one_hot_gt * alpha)
+        A = A + 0.001 * (strength - (one_hot_gt * alpha).sum(dim=1, keepdims=True))
 
     # L_kl
     # alpha_kl = (alpha - 1) * (1 - one_hot_gt) + 1
