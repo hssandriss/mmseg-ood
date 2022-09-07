@@ -370,9 +370,9 @@ def main():
                     # remove tmp dir when cityscapes evaluation
                     shutil.rmtree(tmpdir)
                 curr_res = {}
-                reg_ood_valid = metric_dict.pop('reg_ood_valid', False)
-                sl_ood_valid = metric_dict.pop('sl_ood_valid', False)
-                in_dist_valid = metric_dict.pop('in_dist_valid', False)
+                reg_ood_valid = metric_dict['metric'].pop('reg_ood_valid', False)
+                sl_ood_valid = metric_dict['metric'].pop('sl_ood_valid', False)
+                in_dist_valid = metric_dict['metric'].pop('in_dist_valid', False)
                 if reg_ood_valid:
                     curr_iter_reg_ood_df = pd.DataFrame(
                         data=[[all_checkpoints_iter[i],

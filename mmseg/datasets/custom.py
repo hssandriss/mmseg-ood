@@ -682,6 +682,9 @@ class CustomDataset(Dataset):
         for key, val in sl_ood_metrics_summary.items():
             sl_ood_table_data.add_column(key, [val])
 
+        eval_results['in_dist_valid'] = False
+        eval_results['sl_ood_valid'] = False
+        eval_results['reg_ood_valid'] = False
         if in_dist_valid:
             print_log('\n' + 'Per class results:', logger)
             print_log('\n' + class_table_data.get_string(), logger=logger)

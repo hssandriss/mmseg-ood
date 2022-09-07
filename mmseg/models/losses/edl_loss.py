@@ -72,14 +72,19 @@ def mse_edl_loss(one_hot_gt, alpha, num_classes):
     A = torch.sum((one_hot_gt - prob)**2, dim=1, keepdim=True)
     # L_var
     B = torch.sum(alpha * (strength - alpha) / (strength * strength * (strength + 1)), dim=1, keepdim=True)
-    # L_KL
-    _, pred_cls = torch.max(alpha / strength, 1, keepdim=True)
-    _, target = torch.max(one_hot_gt, 1, keepdim=True)
-    accurate_match = torch.eq(pred_cls, target).float()
-    alpha_kl = (alpha - 1) * (1 - one_hot_gt) + 1
-    C = (1 - accurate_match) * KL(alpha_kl, num_classes)
+    # L_kl
+    # alpha_kl = (alpha - 1) * (1 - one_hot_gt) + 1
+    alpha_kl = alpha * (1 - one_hot_gt) + one_hot_gt
+    C = KL(alpha_kl, num_classes)
+
+    # _, pred_cls = torch.max(alpha / strength, 1, keepdim=True)
+    # _, target = torch.max(one_hot_gt, 1, keepdim=True)
+    # accurate_match = torch.eq(pred_cls, target).float()
+    # C = (1 - accurate_match) * KL(alpha_kl, num_classes)
+
     # L_EUC
     D, E = EUC(alpha, one_hot_gt, num_classes)
+
     return A, B, C, D, E
 
 
@@ -92,19 +97,21 @@ def ce_edl_loss(one_hot_gt, alpha, num_classes, func, bis=False, with_var=False,
         A = A + A_
     if with_var:
         B = torch.sum(alpha * (strength - alpha) / (strength * strength * (strength + 1)), dim=1, keepdim=True)
-        A = A + B
+        A = A - B
     if reg:
-        A = A + 0.001 * strength
+        import ipdb; ipdb.set_trace()
+        A = A + 0.001 * (strength - one_hot_gt * alpha)
 
     # L_kl
-    # TODO: Apply just for inaccurate
-    alpha_kl = alpha * (1 - one_hot_gt) + one_hot_gt
-    _, pred_cls = torch.max(alpha / strength, 1, keepdim=True)
-    _, target = torch.max(one_hot_gt, 1, keepdim=True)
-    accurate_match = torch.eq(pred_cls, target).float()
     # alpha_kl = (alpha - 1) * (1 - one_hot_gt) + 1
-    C = (1 - accurate_match) * KL(alpha, num_classes)
-    # C = KL(alpha_kl, num_classes)
+    alpha_kl = alpha * (1 - one_hot_gt) + one_hot_gt
+    C = KL(alpha_kl, num_classes)
+
+    # _, pred_cls = torch.max(alpha / strength, 1, keepdim=True)
+    # _, target = torch.max(one_hot_gt, 1, keepdim=True)
+    # accurate_match = torch.eq(pred_cls, target).float()
+    # C = (1 - accurate_match) * KL(alpha_kl, num_classes)
+
     # L_EUC
     D, E = EUC(alpha, one_hot_gt, num_classes)
 
@@ -142,13 +149,15 @@ def EUC(alpha, one_hot_gt, num_classes):
 def lam(epoch_num, total_epochs, annealing_start, annealing_step, annealing_method):
     if annealing_method == 'step':
         annealing_coef = torch.min(torch.tensor(1.0, dtype=torch.float32), torch.tensor(
-            max(epoch_num - 10, 0.) / annealing_step, dtype=torch.float32))
+            epoch_num / annealing_step, dtype=torch.float32))
     elif annealing_method == 'exp':
         annealing_coef = annealing_start * torch.exp(-torch.log(annealing_start) / (total_epochs - 1) * epoch_num)
     elif annealing_method == 'zero':
         annealing_coef = torch.tensor(0., dtype=torch.float32)
-    elif annealing_method == 'constant':
+    elif annealing_method == 'one':
         annealing_coef = torch.tensor(1., dtype=torch.float32)
+    elif annealing_method == 'constant':
+        annealing_coef = torch.tensor(.1, dtype=torch.float32)
     else:
         raise NotImplementedError
     return annealing_coef
