@@ -300,7 +300,7 @@ class NfBllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
 
         for loss_decode in losses_decode:
             if loss_decode.loss_name not in loss:
-                loss[loss_decode.loss_name] = loss_decode(seg_logit, seg_label, ignore_index=self.ignore_index) - sum_log_jacobians.mean()
+                loss[loss_decode.loss_name] = loss_decode(seg_logit, seg_label, ignore_index=self.ignore_index)  # - sum_log_jacobians.mean()
                 loss['mean_jacobian_logdet'] = sum_log_jacobians.mean().detach()
                 if loss_decode.loss_name.startswith("loss_edl"):
                     # load
