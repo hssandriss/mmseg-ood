@@ -123,3 +123,4 @@ mmseg/.mim
 *.html
 *.npy
 *.csv
+*.png
