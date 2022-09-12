@@ -15,5 +15,6 @@ class ParseEpochToLossHook(Hook):
             runner.model.module.decode_head.loss_decode.epoch_num = runner.epoch
 
     def after_epoch(self, runner):
-        if runner.model.module.decode_head.loss_decode.epoch_num != runner.epoch:
-            import ipdb; ipdb.set_trace()
+        if hasattr(runner.model.module.decode_head.loss_decode, "epoch_num"):
+            if runner.model.module.decode_head.loss_decode.epoch_num != runner.epoch:
+                import ipdb; ipdb.set_trace()

@@ -1,6 +1,6 @@
 _base_ = [
     '../_base_/models/segmenter_vit-b16_mask.py',
-    '../_base_/datasets/street_hazards_769x769.py', '../_base_/epoch_runtime.py',
+    '../_base_/datasets/street_hazards_512x512.py', '../_base_/epoch_runtime.py',
     '../_base_/schedules/schedule_120e.py'
 ]
 
@@ -10,7 +10,7 @@ backbone_norm_cfg = dict(type='LN', eps=1e-6, requires_grad=True)
 model = dict(
     pretrained=checkpoint,
     backbone=dict(
-        img_size=(720, 720),
+        img_size=(512, 512),
         embed_dims=384,
         num_heads=6,
     ),
@@ -23,12 +23,13 @@ model = dict(
         num_heads=6,
         embed_dims=384,
         dropout_ratio=0.0,
-        loss_decode=dict(type='EDLLoss',
-                         loss_variant='mse',
-                         num_classes=12)))
+        loss_decode=dict(
+            type='CrossEntropyLoss',
+            # use_sigmoid=False,
+            loss_weight=1.0)))
 
 optimizer = dict(lr=0.001, weight_decay=0.0)
-data = dict(
-    samples_per_gpu=3,
-    workers_per_gpu=3,
-)
+# data = dict(
+#     samples_per_gpu=3,
+#     workers_per_gpu=3,
+# )
