@@ -72,7 +72,7 @@ class StreetHazardsDataset(CustomDataset):
         return auroc, apr, fpr
 
     def get_in_out_conf(self, pred_confs, seg_gt, conf_type):
-        assert conf_type in ("max_prob", "max_logit", "entropy", "u")
+        assert conf_type in ("max_prob", "max_logit", "entropy", "vacuity", "dissonance")
         confs = deepcopy(pred_confs)
         # Mask ignored index
 
@@ -88,14 +88,13 @@ class StreetHazardsDataset(CustomDataset):
 
         # samples with out indices are positive class so they should have higher scores
         if conf_type == "max_logit":
-            # gather their respective conf values
             in_scores = - confs[np.logical_not(out_index)]
             out_scores = - confs[out_index]
         elif conf_type == "max_prob":
             in_scores = 1 - confs[np.logical_not(out_index)]
             out_scores = 1 - confs[out_index]
         else:
-            # entropy, u
+            # entropy, vacuity, dissonance
             in_scores = confs[np.logical_not(out_index)]
             out_scores = confs[out_index]
         return out_scores, in_scores
