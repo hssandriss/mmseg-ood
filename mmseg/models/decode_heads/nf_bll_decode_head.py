@@ -15,6 +15,7 @@ from pyro.distributions.transforms.sylvester import Sylvester
 from pyro.distributions.transforms.planar import Planar
 from pyro.distributions.transforms.radial import Radial
 from pyro.distributions.transforms.affine_autoregressive import affine_autoregressive
+from pyro.distributions.transforms.batchnorm import BatchNorm
 import torch.distributions as tdist
 "test w/: python tools/train.py configs/deeplabv3/deeplabv3_r50-d8_720x720_70e_cityscapes_nf_bll.py --experiment-tag 'TEST'"
 
@@ -81,7 +82,8 @@ class NfBllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
                      type='Normal', std=0.01, override=dict(name='conv_seg')),
                  flow_type='planar_flow',
                  flow_length=2,
-                 nsamples_train=10):
+                 nsamples_train=10,
+                 use_bn_flow=False):
         super(NfBllBaseDecodeHead, self).__init__(init_cfg)
         self._init_inputs(in_channels, in_index, input_transform)
         self.channels = channels
@@ -95,7 +97,7 @@ class NfBllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         self.frozen_features = False
         self.ignore_index = ignore_index
         self.align_corners = align_corners
-
+        self.use_bn_flow = use_bn_flow
         if isinstance(loss_decode, dict):
             self.loss_decode = build_loss(loss_decode)
         elif isinstance(loss_decode, (list, tuple)):
@@ -127,7 +129,8 @@ class NfBllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
             self.density_estimation = NormalizingFlowDensity(
                 dim=self.latent_dim,
                 flow_length=self.flow_length,
-                flow_type=self.flow_type)
+                flow_type=self.flow_type,
+                use_bn=self.use_bn_flow)
         else:
             raise NotImplementedError
         self.w_shape, self.b_shape = self.conv_seg.weight.shape, self.conv_seg.bias.shape
@@ -321,7 +324,7 @@ class NfBllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
 
 
 class NormalizingFlowDensity(nn.Module):
-    def __init__(self, dim, flow_length, flow_type='planar_flow'):
+    def __init__(self, dim, flow_length, flow_type='planar_flow', use_bn=True):
         super(NormalizingFlowDensity, self).__init__()
         self.dim = dim
         self.flow_length = flow_length
@@ -334,34 +337,39 @@ class NormalizingFlowDensity(nn.Module):
 
         # build the flow sequence
         if self.flow_type == 'radial_flow':
-            self.transforms = nn.Sequential(*(
-                Radial(dim) for _ in range(flow_length)
-            ))
+            transforms = [Radial(dim) for _ in range(flow_length)]
+
         elif self.flow_type == 'sylvester':
-            self.transforms = nn.Sequential(*(
-                Sylvester(dim) for _ in range(flow_length)
-            ))
+            transforms = [Sylvester(dim) for _ in range(flow_length)]
+
         elif self.flow_type == 'planar_flow':
-            self.transforms = nn.Sequential(*(
-                Planar(dim) for _ in range(flow_length)
-            ))
+            transforms = [Planar(dim) for _ in range(flow_length)]
+
         elif self.flow_type == 'iaf_flow':
-            self.transforms = nn.Sequential(*(
-                affine_autoregressive(dim, hidden_dims=[128, 128]) for _ in range(flow_length)
-            ))
+            transforms = [affine_autoregressive(dim, hidden_dims=[self.dim]) for _ in range(flow_length)]
+
         else:
             raise NotImplementedError
+        if use_bn:
+            bn_indices = []
+            for i in range(flow_length):
+                if i < flow_length - 1:
+                    bn_indices.append(len(bn_indices) + i + 1)
+            for i in bn_indices:
+                transforms.insert(i, BatchNorm(self.dim))
+        self.transforms = nn.Sequential(*transforms)
 
     def forward(self, z):
         sum_log_jacobians = 0
+        # import ipdb; ipdb.set_trace()
         for transform in self.transforms:
             z_next = transform(z)
             sum_log_jacobians = sum_log_jacobians + transform.log_abs_det_jacobian(z, z_next)
             z = z_next
+            # import ipdb; ipdb.set_trace()
         # import numpy as np
         # with open('z_samples.npy', 'wb') as f:
         #     np.save(f, z.detach().cpu().numpy())
-        # import ipdb; ipdb.set_trace()
         return z, sum_log_jacobians
 
     def log_prob(self, x):
