@@ -66,6 +66,64 @@ def cross_entropy(pred,
     return loss
 
 
+def cross_entropy_softplus(pred,
+                           label,
+                           weight=None,
+                           class_weight=None,
+                           reduction='mean',
+                           avg_factor=None,
+                           ignore_index=-100,
+                           avg_non_ignore=False,
+                           label_smoothing=0.0):
+    """cross_entropy. The wrapper function for :func:`F.cross_entropy`
+
+    Args:
+        pred (torch.Tensor): The prediction with shape (N, 1).
+        label (torch.Tensor): The learning label of the prediction.
+        weight (torch.Tensor, optional): Sample-wise loss weight.
+            Default: None.
+        class_weight (list[float], optional): The weight for each class.
+            Default: None.
+        reduction (str, optional): The method used to reduce the loss.
+            Options are 'none', 'mean' and 'sum'. Default: 'mean'.
+        avg_factor (int, optional): Average factor that is used to average
+            the loss. Default: None.
+        ignore_index (int): Specifies a target value that is ignored and
+            does not contribute to the input gradients. When
+            ``avg_non_ignore `` is ``True``, and the ``reduction`` is
+            ``''mean''``, the loss is averaged over non-ignored targets.
+            Defaults: -100.
+        avg_non_ignore (bool): The flag decides to whether the loss is
+            only averaged over non-ignored targets. Default: False.
+            `New in version 0.23.0.`
+    """
+
+    # class_weight is a manual rescaling weight given to each class.
+    # If given, has to be a Tensor of size C element-wise losses
+    pred_pos = F.softplus(pred)
+
+    loss = F.nll_loss(
+        pred_pos / pred_pos.sum(1, keepdim=True),
+        label,
+        weight=class_weight,
+        reduction='none',
+        ignore_index=ignore_index
+    )
+
+    # apply weights and do the reduction
+    # average loss over non-ignored elements
+    # pytorch's official cross_entropy average loss over non-ignored elements
+    # refer to https://github.com/pytorch/pytorch/blob/56b43f4fec1f76953f15a627694d4bba34588969/torch/nn/functional.py#L2660  # noqa
+    if (avg_factor is None) and avg_non_ignore and reduction == 'mean':
+        avg_factor = label.numel() - (label == ignore_index).sum().item()
+    if weight is not None:
+        weight = weight.float()
+    loss = weight_reduce_loss(
+        loss, weight=weight, reduction=reduction, avg_factor=avg_factor)
+
+    return loss
+
+
 def _expand_onehot_labels(labels, label_weights, target_shape, ignore_index):
     """Expand onehot labels to match the size of prediction."""
     bin_labels = labels.new_zeros(target_shape)
@@ -220,16 +278,19 @@ class CrossEntropyLoss(nn.Module):
 
     def __init__(self,
                  use_sigmoid=False,
+                 use_softplus=False,
                  use_mask=False,
                  reduction='mean',
                  class_weight=None,
                  loss_weight=1.0,
                  loss_name='loss_ce',
                  avg_non_ignore=False,
-                 label_smoothing=0.0):
+                 label_smoothing=0.0,
+                 ):
         super(CrossEntropyLoss, self).__init__()
         assert (use_sigmoid is False) or (use_mask is False)
         self.use_sigmoid = use_sigmoid
+        self.use_softplus = use_softplus
         self.use_mask = use_mask
         self.reduction = reduction
         self.loss_weight = loss_weight
@@ -247,8 +308,11 @@ class CrossEntropyLoss(nn.Module):
             self.cls_criterion = binary_cross_entropy
         elif self.use_mask:
             self.cls_criterion = mask_cross_entropy
+        elif self.use_softplus:
+            self.cls_criterion = cross_entropy_softplus
         else:
             self.cls_criterion = cross_entropy
+
         self._loss_name = loss_name
 
     def extra_repr(self):
