@@ -1,6 +1,6 @@
 _base_ = [
     '../_base_/models/segmenter_vit-b16_mask.py',
-    '../_base_/datasets/street_hazards_512x512.py', '../_base_/epoch_runtime.py',
+    '../_base_/datasets/street_hazards_512x512_subtest.py', '../_base_/epoch_runtime.py',
     '../_base_/schedules/schedule_120e.py'
 ]
 
@@ -23,9 +23,10 @@ model = dict(
         num_heads=6,
         embed_dims=384,
         dropout_ratio=0.0,
-        loss_decode=dict(type='EDLLoss',
-                         loss_variant='mse',
-                         num_classes=12)))
+        loss_decode=dict(
+            type='CrossEntropyLoss',
+            # use_sigmoid=False,
+            loss_weight=1.0)))
 
 optimizer = dict(lr=0.001, weight_decay=0.0)
 # data = dict(
