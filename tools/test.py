@@ -363,6 +363,10 @@ def main():
                 format_only=args.format_only or eval_on_format_results,
                 format_args=eval_kwargs)
 
+        prev_map = torch.cat([model.module.decode_head.conv_seg.weight.reshape(-1), model.module.decode_head.conv_seg.bias.reshape(-1)]).detach().data
+        curr_map = model.module.decode_head.density_estimation.z0_mean.data
+        assert torch.eq(prev_map, curr_map).all(), 'the base dist mean does not coincide with previous MAP'
+
         rank, _ = get_dist_info()
         if rank == 0:
             if args.out:

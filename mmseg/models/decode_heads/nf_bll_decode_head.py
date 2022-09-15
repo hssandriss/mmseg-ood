@@ -17,6 +17,7 @@ from pyro.distributions.transforms.radial import Radial
 from pyro.distributions.transforms.affine_autoregressive import affine_autoregressive
 from pyro.distributions.transforms.batchnorm import BatchNorm
 import torch.distributions as tdist
+import numpy as np
 "test w/: python tools/train.py configs/deeplabv3/deeplabv3_r50-d8_720x720_70e_cityscapes_nf_bll.py --experiment-tag 'TEST'"
 
 
@@ -360,16 +361,15 @@ class NormalizingFlowDensity(nn.Module):
         self.transforms = nn.Sequential(*transforms)
 
     def forward(self, z):
+        # np.savetxt('initial_5000_z_samples_base_I.csv', z.detach().cpu().numpy())
         sum_log_jacobians = 0
-        # import ipdb; ipdb.set_trace()
         for transform in self.transforms:
             z_next = transform(z)
             sum_log_jacobians = sum_log_jacobians + transform.log_abs_det_jacobian(z, z_next)
             z = z_next
-            # import ipdb; ipdb.set_trace()
-        # import numpy as np
-        # with open('z_samples.npy', 'wb') as f:
-        #     np.save(f, z.detach().cpu().numpy())
+        # np.savetxt("trained_5000_z_samples_2xradial.csv", z.detach().cpu().numpy())
+        # proj = self.pca.transform(z.detach().cpu().numpy())
+        # clusters = self.kmeans.predict(proj)
         return z, sum_log_jacobians
 
     def log_prob(self, x):
@@ -380,7 +380,9 @@ class NormalizingFlowDensity(nn.Module):
 
     def sample_base(self, n):
         device = next(self.parameters()).device
-        return self.base_dist.sample([n]).to(device)
+        samples = self.base_dist.sample([n]).to(device)
+
+        return samples
 
     # def latent_loss(self, log_det):
     #     """Computes KL loss.

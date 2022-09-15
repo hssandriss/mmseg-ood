@@ -202,7 +202,10 @@ class ASPPNfBllHead(NfBllBaseDecodeHead):
         assert output.is_leaf, "you are backpropagating on feature extractor!"
         # torch.cuda.synchronize()
         # t1 = time.time()
-        z0 = self.density_estimation.sample_base(nsamples)
+        if nsamples == 1:
+            z0 = self.density_estimation.z0_mean.data
+        else:
+            z0 = self.density_estimation.sample_base(nsamples)
         # torch.cuda.synchronize()
         # t2 = time.time()
         z, sum_log_jacobians = self.density_estimation.forward(z0)
