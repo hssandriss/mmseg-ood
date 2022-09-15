@@ -106,7 +106,8 @@ def single_gpu_test(model,
     for batch_indices, data in zip(loader_indices, data_loader):
         with torch.no_grad():
             result, seg_logit = model(return_loss=False, **data)  # returns labels and logits
-        # import ipdb; ipdb.set_trace()
+        # with open('last_cluster.npy', 'rb') as f:
+        #     clusters = np.load(f).tolist()
         seg_logit = seg_logit.detach()
         seg_gt = dataset.get_gt_seg_map_by_idx_and_reduce_zero_label(batch_indices[0])
 
@@ -130,14 +131,14 @@ def single_gpu_test(model,
                 else:
                     out_file = None
                 # Todo implement bg mask and set it to transparent color
-                model.module.show_result(
-                    img_show,
-                    result,
-                    palette=dataset.PALETTE,
-                    show=show,
-                    out_file=out_file,
-                    opacity=opacity)
-
+                for idx, res in enumerate(result):
+                    model.module.show_result(
+                        img_show,
+                        [res],
+                        palette=dataset.PALETTE,
+                        show=show,
+                        out_file=out_file[:-4] + f"_{idx}" + out_file[-4:],
+                        opacity=opacity)
                 model.module.show_result(
                     img_show,
                     [seg_gt, ],
@@ -166,7 +167,7 @@ def single_gpu_test(model,
                         plot_conf(probs.max(dim=1)[0].var(dim=0).cpu().numpy(), out_file[: -4] + f"_sm_var_1" + out_file[-4:])
 
                 # Mask for edges between separate labels
-                plot_mask(dataset.edge_detector(seg_gt).cpu().numpy(), out_file[: -4] + "_edge_mask" + out_file[-4:])
+                # plot_mask(dataset.edge_detector(seg_gt).cpu().numpy(), out_file[: -4] + "_edge_mask" + out_file[-4:])
                 # Mask of ood samples
                 if hasattr(dataset, "ood_indices"):
                     plot_mask((seg_gt == dataset.ood_indices[0]).astype(np.uint8), out_file[:-4] + "_ood_mask" + out_file[-4:])
