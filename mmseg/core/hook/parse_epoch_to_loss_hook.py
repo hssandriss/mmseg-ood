@@ -13,7 +13,7 @@ class ParseEpochToLossHook(Hook):
     """
 
     def before_train_epoch(self, runner):
-        print_log(f"Epoch ---> {runner.epoch}/{runner._max_epochs}")
+        # print_log(f"Epoch ---> {runner.epoch}/{runner._max_epochs}")
         if hasattr(runner.model.module.decode_head.loss_decode, "epoch_num"):
             if runner.epoch > 0 and (
                     runner.model.module.decode_head.loss_decode.epoch_num + 1 != runner.epoch or runner.model.module.decode_head.loss_decode.total_epochs !=
