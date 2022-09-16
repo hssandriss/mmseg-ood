@@ -287,7 +287,7 @@ class CustomDataset(Dataset):
             self.gt_seg_map_loader(results)
             yield results['gt_semantic_seg']
 
-    def pre_eval_custom(self, seg_logit, seg_gt, logit2prob="softmax", use_bags=False, bags_kwargs={}):
+    def pre_eval_custom(self, seg_logit, seg_gt, logit2prob="softmax", logit_fn=F.softmax, use_bags=False, bags_kwargs={}):
         NA = np.nan  # value when metric is not used
 
         seg_logit = seg_logit.cpu()
@@ -302,10 +302,7 @@ class CustomDataset(Dataset):
 
         if not use_bags:
             if logit2prob == "edl":
-                # With EDL we can use two three more measures of of uncertainty on prob.
-                # - Vacuity (uncertainty due to a lack of evidence)
-                # - Dissonance (uncertainty due to conflicting evidence).
-                alpha = seg_logit_flat
+                alpha = logit_fn(seg_logit_flat)
                 strength = alpha.sum(dim=1, keepdim=True)
                 u = num_cls / strength
                 disonnance = diss(alpha)
@@ -319,7 +316,7 @@ class CustomDataset(Dataset):
                                    ((alpha - 1.0) * torch.digamma(alpha)).sum(1, keepdim=True))
                 seg_disonnance = disonnance.squeeze()
             else:
-                probs = F.softmax(seg_logit_flat, dim=1)
+                probs = logit_fn(seg_logit_flat)
                 seg_max_prob = probs.max(dim=1)[0]
                 seg_max_logit = seg_logit_flat.max(dim=1)[0]
                 seg_emp_entropy = - (probs * probs.log()).sum(1)

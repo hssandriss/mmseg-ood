@@ -204,14 +204,23 @@ def single_gpu_test(model,
             if not model.module.decode_head.use_bags:
                 if model.module.decode_head.loss_decode.loss_name.startswith("loss_edl"):
                     # For EDL probs
-                    seg_evidence = model.module.decode_head.loss_decode.logit2evidence(seg_logit) + 1
-                    seg_evidence = seg_evidence**2 if model.module.decode_head.loss_decode.pow_alpha else seg_evidence
-                    result_oth = dataset.pre_eval_custom(seg_evidence, seg_gt, "edl")
+                    def logit2alpha(x):
+                        ev = model.module.decode_head.loss_decode.logit2evidence(x) + 1
+                        if model.module.decode_head.loss_decode.pow_alpha:
+                            ev = ev**2
+                        return ev
+                    result_oth = dataset.pre_eval_custom(seg_logit, seg_gt, "edl", logit_fn=logit2alpha)
                 else:
+                    if model.module.decode_head.loss_decode.use_softplus:
+                        def logit2prob(x):
+                            return F.softplus(x) / F.softplus(x).sum(dim=1, keepdim=True)
+                    else:
+                        def logit2prob(x):
+                            return F.softmax(x, dim=1)
                     # For softmax probs
-                    result_oth = dataset.pre_eval_custom(seg_logit, seg_gt, "softmax")
+                    result_oth = dataset.pre_eval_custom(seg_logit, seg_gt, "softmax", logit_fn=logit2prob)
             else:
-                result_oth = dataset.pre_eval_custom(seg_evidence, seg_gt, "softmax",
+                result_oth = dataset.pre_eval_custom(seg_logit, seg_gt, "softmax",
                                                      model.module.decode_head.use_bags,
                                                      model.module.decode_head.bags_kwargs)
             result = [(result_seg, result_oth)]
