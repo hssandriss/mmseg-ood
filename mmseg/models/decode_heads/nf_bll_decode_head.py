@@ -84,7 +84,8 @@ class NfBllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
                  flow_type='planar_flow',
                  flow_length=2,
                  nsamples_train=10,
-                 use_bn_flow=False):
+                 use_bn_flow=False,
+                 redefine_base_density=True):
         super(NfBllBaseDecodeHead, self).__init__(init_cfg)
         self._init_inputs(in_channels, in_index, input_transform)
         self.channels = channels
@@ -99,6 +100,7 @@ class NfBllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         self.ignore_index = ignore_index
         self.align_corners = align_corners
         self.use_bn_flow = use_bn_flow
+        self.redefine_base_density = redefine_base_density
         if isinstance(loss_decode, dict):
             self.loss_decode = build_loss(loss_decode)
         elif isinstance(loss_decode, (list, tuple)):
@@ -249,8 +251,8 @@ class NfBllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         Returns:
             dict[str, Tensor]: a dictionary of loss components
         """
-        seg_logits, sum_log_jacobians = self.forward(inputs, self.nsamples_train)
-        losses = self.losses(seg_logits, gt_semantic_seg, sum_log_jacobians)
+        seg_logits, log_prob_z0, sum_log_jacobians = self.forward(inputs, self.nsamples_train)
+        losses = self.losses(seg_logits, gt_semantic_seg, log_prob_z0, sum_log_jacobians)
         return losses
 
     def forward_test(self, inputs, img_metas, test_cfg):
@@ -268,7 +270,7 @@ class NfBllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         Returns:
             Tensor: Output segmentation map.
         """
-        seg_logits, _ = self.forward(inputs, 1)
+        seg_logits, _, _ = self.forward(inputs, 1)
 
         return seg_logits
 
@@ -281,7 +283,7 @@ class NfBllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         return output
 
     @force_fp32(apply_to=('seg_logit', ))
-    def losses(self, seg_logit, seg_label, sum_log_jacobians):
+    def losses(self, seg_logit, seg_label, log_prob_z0, sum_log_jacobians):
         """Compute segmentation loss."""
         loss = dict()
         seg_logit = resize(
@@ -304,7 +306,9 @@ class NfBllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
 
         for loss_decode in losses_decode:
             if loss_decode.loss_name not in loss:
-                loss[loss_decode.loss_name] = loss_decode(seg_logit, seg_label, ignore_index=self.ignore_index)  # - sum_log_jacobians.mean()
+                # NLL
+                loss[loss_decode.loss_name] = loss_decode(
+                    seg_logit, seg_label, ignore_index=self.ignore_index) + log_prob_z0.mean() - sum_log_jacobians.mean()
                 loss['mean_jacobian_logdet'] = sum_log_jacobians.mean().detach()
                 if loss_decode.loss_name.startswith("loss_edl"):
                     # load
@@ -359,6 +363,8 @@ class NormalizingFlowDensity(nn.Module):
             for i in bn_indices:
                 transforms.insert(i, BatchNorm(self.dim))
         self.transforms = nn.Sequential(*transforms)
+        self.flow_dist = tdist.TransformedDistribution(self.base_dist, transforms)
+        import ipdb; ipdb.set_trace()
 
     def forward(self, z):
         # np.savetxt('initial_5000_z_samples_base_I.csv', z.detach().cpu().numpy())
@@ -373,7 +379,7 @@ class NormalizingFlowDensity(nn.Module):
         return z, sum_log_jacobians
 
     def log_prob(self, x):
-        z, sum_log_jacobians = self.forward(x)
+        z, log_prob_z, sum_log_jacobians = self.forward(x)
         log_prob_z = self.base_dist.log_prob(z)
         log_prob_x = log_prob_z + sum_log_jacobians
         return log_prob_x

@@ -203,9 +203,11 @@ class ASPPNfBllHead(NfBllBaseDecodeHead):
         # torch.cuda.synchronize()
         # t1 = time.time()
         if nsamples == 1:
-            z0 = self.density_estimation.z0_mean.data
+            z0 = self.density_estimation.z0_mean.data.unsqueeze(0)
         else:
             z0 = self.density_estimation.sample_base(nsamples)
+        log_prob_z0 = self.density_estimation.base_dist.log_prob(z0)
+
         # torch.cuda.synchronize()
         # t2 = time.time()
         z, sum_log_jacobians = self.density_estimation.forward(z0)
@@ -215,4 +217,4 @@ class ASPPNfBllHead(NfBllBaseDecodeHead):
         # torch.cuda.synchronize()
         # t4 = time.time()
         # import ipdb; ipdb.set_trace()
-        return output, sum_log_jacobians
+        return output, log_prob_z0, sum_log_jacobians
