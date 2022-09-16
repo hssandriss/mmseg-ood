@@ -18,6 +18,7 @@ from pyro.distributions.transforms.affine_autoregressive import affine_autoregre
 from pyro.distributions.transforms.batchnorm import BatchNorm
 import torch.distributions as tdist
 import numpy as np
+import pyro
 "test w/: python tools/train.py configs/deeplabv3/deeplabv3_r50-d8_720x720_70e_cityscapes_nf_bll.py --experiment-tag 'TEST'"
 
 
@@ -363,15 +364,17 @@ class NormalizingFlowDensity(nn.Module):
             for i in bn_indices:
                 transforms.insert(i, BatchNorm(self.dim))
         self.transforms = nn.Sequential(*transforms)
-        self.flow_dist = tdist.TransformedDistribution(self.base_dist, transforms)
-        import ipdb; ipdb.set_trace()
+        self.flow_dist = pyro.distributions.TransformedDistribution(self.base_dist, transforms)
 
     def forward(self, z):
         # np.savetxt('initial_5000_z_samples_base_I.csv', z.detach().cpu().numpy())
         sum_log_jacobians = 0
         for transform in self.transforms:
             z_next = transform(z)
-            sum_log_jacobians = sum_log_jacobians + transform.log_abs_det_jacobian(z, z_next)
+            if isinstance(transform, BatchNorm):
+                sum_log_jacobians = sum_log_jacobians + transform.log_abs_det_jacobian(z, z_next).sum(-1)
+            else:
+                sum_log_jacobians = sum_log_jacobians + transform.log_abs_det_jacobian(z, z_next)
             z = z_next
         # np.savetxt("trained_5000_z_samples_2xradial.csv", z.detach().cpu().numpy())
         # proj = self.pca.transform(z.detach().cpu().numpy())
