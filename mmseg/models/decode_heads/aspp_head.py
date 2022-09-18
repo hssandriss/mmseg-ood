@@ -198,23 +198,29 @@ class ASPPNfBllHead(NfBllBaseDecodeHead):
         # t0 = time.time()
         with torch.no_grad():
             output = self._forward_feature(inputs)
-        # import ipdb; ipdb.set_trace()
         assert output.is_leaf, "you are backpropagating on feature extractor!"
         # torch.cuda.synchronize()
         # t1 = time.time()
-        if nsamples == 1:
+        if nsamples == 1 and self.density_type == 'flow':
             z0 = self.density_estimation.z0_mean.data.unsqueeze(0)
-        else:
+            zk, sum_log_jacobians = self.density_estimation.forward_flow(z0)
+            output = self.cls_seg(output, zk)
+            kl = self.density_estimation.flow_kl_loss(z0, zk, sum_log_jacobians)
+            return output, kl
+        elif nsamples > 1 and self.density_type == 'flow':
             z0 = self.density_estimation.sample_base(nsamples)
-        log_prob_z0 = self.density_estimation.base_dist.log_prob(z0)
-
-        # torch.cuda.synchronize()
-        # t2 = time.time()
-        z, sum_log_jacobians = self.density_estimation.forward(z0)
-        # torch.cuda.synchronize()
-        # t3 = time.time()
-        output = self.cls_seg(output, z)
-        # torch.cuda.synchronize()
-        # t4 = time.time()
-        # import ipdb; ipdb.set_trace()
-        return output, log_prob_z0, sum_log_jacobians
+            zk, sum_log_jacobians = self.density_estimation.forward_flow(z0)
+            output = self.cls_seg(output, zk)
+            kl = self.density_estimation.flow_kl_loss(z0, zk, sum_log_jacobians)
+            return output, kl
+        elif nsamples == 1 and self.density_type in ('full_normal', 'fact_normal'):
+            zk = self.density_estimation.mu.data.unsqueeze(0)
+            output = self.cls_seg(output, zk)
+            return output, 0
+        elif nsamples > 1 and self.density_type in ('full_normal', 'fact_normal'):
+            z0 = self.density_estimation.sample_base(nsamples)
+            zk, _ = self.density_estimation.forward_normal(z0)
+            output = self.cls_seg(output, zk)
+            return output, 0
+        else:
+            raise NotImplementedError

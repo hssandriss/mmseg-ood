@@ -212,6 +212,6 @@ def train_segmentor(model,
         runner.load_checkpoint(cfg.load_from)
         runner.model.module.freeze_encoder()
         runner.model.module.freeze_feature_extractor()
-        if runner.model.module.decode_head.redefine_base_density:
+        if runner.model.module.decode_head.initialize_at_w_map:
             runner.model.module.decode_head.update_z0_params()
     runner.run(data_loaders, cfg.workflow)
