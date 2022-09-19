@@ -616,7 +616,7 @@ class CustomDataset(Dataset):
             class_names = self.CLASSES
 
         # summary table
-        default_metrics = ('aAcc', 'IoU', 'Acc', 'Fscore', 'Precision', 'Recall', 'Dice')
+        default_metrics = ('aAcc', 'IoU', 'Acc', 'Fscore', 'Precision', 'Recall', 'Dice', '')
         ret_metrics_summary = OrderedDict({
             ret_metric: np.round(np.nanmean(ret_metric_value) * 100, 2)
             if ret_metric in default_metrics  # percentage metrics
@@ -658,7 +658,7 @@ class CustomDataset(Dataset):
         ret_metrics_class.update({'Class': class_names})
         ret_metrics_class.move_to_end('Class', last=False)
         # valid update
-        in_dist_valid = all([not np.isnan(v) for k, v in ret_metrics_summary.items() if k not in default_metrics])
+        in_dist_valid = all([not np.isnan(v) for k, v in ret_metrics_summary.items() if k in default_metrics])
         reg_ood_valid = all([not np.isnan(v) for v in regular_ood_metrics_summary.values()]) and len(regular_ood_metrics_summary) > 0
         sl_ood_valid = all([not np.isnan(v) for v in sl_ood_metrics_summary.values()]) and len(sl_ood_metrics_summary) > 0
 
