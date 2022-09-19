@@ -205,13 +205,15 @@ class ASPPNfBllHead(NfBllBaseDecodeHead):
             z0 = self.density_estimation.z0_mean.data.unsqueeze(0)
             zk, sum_log_jacobians = self.density_estimation.forward_flow(z0)
             output = self.cls_seg(output, zk)
-            kl = self.density_estimation.flow_kl_loss(z0, zk, sum_log_jacobians)
+            # kl = self.density_estimation.flow_kl_loss(z0, zk, sum_log_jacobians)
+            kl = self.density_estimation.flow_kl_loss_(sum_log_jacobians)
             return output, kl
         elif nsamples > 1 and self.density_type == 'flow':
             z0 = self.density_estimation.sample_base(nsamples)
             zk, sum_log_jacobians = self.density_estimation.forward_flow(z0)
             output = self.cls_seg(output, zk)
-            kl = self.density_estimation.flow_kl_loss(z0, zk, sum_log_jacobians)
+            # kl = self.density_estimation.flow_kl_loss(z0, zk, sum_log_jacobians)
+            kl = self.density_estimation.flow_kl_loss_(sum_log_jacobians)
             return output, kl
         elif nsamples == 1 and self.density_type in ('full_normal', 'fact_normal'):
             zk = self.density_estimation.mu.data.unsqueeze(0)
