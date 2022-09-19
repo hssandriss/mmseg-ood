@@ -374,41 +374,42 @@ class DensityEstimation(nn.Module):
                     transforms.insert(i, BatchNormFlow(self.dim, requires_grad=True))
             self.flow = nn.ModuleList(transforms)
         elif self.density_type == 'full_normal':
-            # Reparametrization distribution
+            # Reparametrization distribution N(0, I)
             self.z0_mean = nn.Parameter(torch.zeros(self.dim), requires_grad=False)
-            self.z0_lvar = nn.Parameter(torch.eye(self.dim), requires_grad=False)
+            self.z0_lvar = nn.Parameter(torch.zeros(self.dim), requires_grad=False)
             # Target distribution parameters
             self.mu = nn.Parameter(torch.zeros(self.dim), requires_grad=True)
             cov_numel = int(self.dim * (self.dim + 1) / 2)
-            self.L_diag_elements = nn.Parameter(torch.ones(self.dim), requires_grad=True) * 0.1
-            self.L_udiag_elements = nn.Parameter(torch.ones(cov_numel - self.dim), requires_grad=True) * 0.1
+            self.L_diag_elements = nn.Parameter(torch.zeros(self.dim), requires_grad=True)
+            self.L_udiag_elements = nn.Parameter(torch.ones(cov_numel - self.dim), requires_grad=True) * 1e-5
             self.udiag_idx = torch.tril_indices(self.dim, self.dim, -1)
             self.diag_idx = torch.vstack((torch.arange(self.dim), torch.arange(self.dim)))
         elif self.density_type == 'fact_normal':
-            # Reparametrization distribution
+            # Reparametrization distribution N(0, I)
             self.z0_mean = nn.Parameter(torch.zeros(self.dim), requires_grad=False)
-            self.z0_lvar = nn.Parameter(torch.eye(self.dim), requires_grad=False)
+            self.z0_lvar = nn.Parameter(torch.zeros(self.dim), requires_grad=False)
             # Target distribution parameters
             self.mu = nn.Parameter(torch.zeros(self.dim), requires_grad=True)
             cov_numel = int(self.dim)
-            self.L_diag_elements = nn.Parameter(torch.ones(int(cov_numel)), requires_grad=True)
+            self.L_diag_elements = nn.Parameter(torch.zeros(int(cov_numel)), requires_grad=True)
             self.diag_idx = torch.vstack((torch.arange(self.dim), torch.arange(self.dim)))
         else:
             raise NotImplementedError
 
-    def forward_normal(self, z):
+    def forward_normal(self, z, L):
         """
         Computes using reparametrization trick new z samples
         inputs:
             z: samples from N(0, I): Fixed distribution
+            L: Lower triangular matrix or diagonal
         """
         if self.density_type == 'full_normal':
             assert self.L_diag_elements.numel() + self.L_udiag_elements.numel() == int(self.dim * (self.dim + 1) / 2)
-            z = self.mu + z @ self._L(full=True)
+            z = self.mu + z @ L
         elif self.density_type == 'fact_normal':
             assert self.L_diag_elements.numel() == self.dim
-            z = self.mu + z @ self._L(full=False)
-        return z, None
+            z = self.mu + z @ L
+        return z
 
     def forward_flow(self, x):
         """Forward pass.
@@ -461,33 +462,42 @@ class DensityEstimation(nn.Module):
         kl = -.5 * torch.sum(1. + lvar - mean.pow(2) - lvar.exp(), dim=1, keepdim=True)
         return (kl - log_det).mean()
 
-    def normal_kl_loss(self, full=True):
+    def normal_kl_loss(self, L):
         # computed in closed form
         # https://stats.stackexchange.com/questions/60680/kl-divergence-between-two-multivariate-gaussians
-        kl = 0.5 * (-self._ldet_normal_cov(full=full) - self.dim + self._normal_cov(full=full).trace() + self.mu.t()  @ self.mu)
+        self._check_positive_definite(L)
+        kl = 0.5 * (-self._ldet_normal_cov(L) - self.dim + self._normal_cov(L).trace() + self.mu.t()  @ self.mu)
         return kl
 
-    def _normal_cov(self, full=True):
-        assert self._check_positive_definite()
-        return self._L(full=full) @ self._L(full=full).t()
+    def _normal_cov(self, L):
+        self._check_positive_definite(L)
+        return L @ L.t()
 
-    def _inv_normal_cov(self, full=True):
-        assert self._check_positive_definite()
-        return torch.cholesky_inverse(self._L(full=full))
+    def _inv_normal_cov(self, L):
+        self._check_positive_definite(L)
+        return torch.cholesky_inverse(L)
 
-    def _ldet_normal_cov(self, full=True):
-        return self._L(full=full).diag().prod().log()
+    def _ldet_normal_cov(self, L):
+        self._check_positive_definite(L)
+        return L.diag().prod().log()
 
-    def _check_positive_definite(self, full=True):
+    def _check_positive_definite(self, L):
         # https://math.stackexchange.com/questions/462682/why-does-the-cholesky-decomposition-requires-a-positive-definite-matrix
-        assert (self._L(full=full).diag() > 0).all(), "The matrix L is not positive definite"
+        assert (L.diag() > 0).all(), "The matrix L is not positive definite"
 
-    def _L(self, full=True):
-        assert self.L_diag_elements.numel() + self.L_udiag_elements.numel() == int(self.dim * (self.dim + 1) / 2)
-        L = torch.zeros((self.dim, self.dim))
-        L[self.diag_idx] = torch.exp(self.L_diag_elements) + 1e-05
+    @property
+    def _L(self):
+        """
+        Reconstructs Lower Triangular Matrix
+        """
+        full = True if self.density_type.startswith('full') else False
+        assert self.L_diag_elements.numel() == self.dim
+        device = next(self.parameters()).device
+        L = torch.zeros((self.dim, self.dim)).to(device)
+        L[self.diag_idx[0, :], self.diag_idx[1, :]] = torch.exp(self.L_diag_elements) + 1e-05
         if full:
-            L[self.udiag_idx] = self.L_udiag_elements
+            assert self.L_udiag_elements.numel() == int(self.dim * (self.dim - 1) / 2)
+            L[self.udiag_idx[0, :], self.udiag_idx[1, :]] = self.L_udiag_elements
         return L
 
 

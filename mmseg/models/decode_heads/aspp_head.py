@@ -216,13 +216,18 @@ class ASPPNfBllHead(NfBllBaseDecodeHead):
             kl = self.density_estimation.flow_kl_loss_(sum_log_jacobians)
             return output, kl
         elif nsamples == 1 and self.density_type in ('full_normal', 'fact_normal'):
+            L = self.density_estimation._L
             zk = self.density_estimation.mu.data.unsqueeze(0)
+            kl = self.density_estimation.normal_kl_loss(L)
             output = self.cls_seg(output, zk)
-            return output, 0
+            return output, kl
         elif nsamples > 1 and self.density_type in ('full_normal', 'fact_normal'):
+            L = self.density_estimation._L
+            import ipdb; ipdb.set_trace()
             z0 = self.density_estimation.sample_base(nsamples)
-            zk, _ = self.density_estimation.forward_normal(z0)
+            zk = self.density_estimation.forward_normal(z0, L)
+            kl = self.density_estimation.normal_kl_loss(L)
             output = self.cls_seg(output, zk)
-            return output, 0
+            return output, kl
         else:
             raise NotImplementedError
