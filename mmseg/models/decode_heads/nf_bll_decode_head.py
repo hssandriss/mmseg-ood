@@ -147,6 +147,7 @@ class NfBllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         self.w_shape, self.b_shape = self.conv_seg.weight.shape, self.conv_seg.bias.shape
         self.w_numel, self.b_numel = self.conv_seg.weight.numel(), self.conv_seg.bias.numel()
         self.initial_p = torch.cat([self.conv_seg.weight.reshape(-1), self.conv_seg.bias.reshape(-1)]).detach()
+        self.kl_vals = []
         self.epoch_num = 0
 
     def update_z0_params(self):
@@ -321,7 +322,7 @@ class NfBllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
             if loss_decode.loss_name not in loss:
                 # NLL
                 loss[loss_decode.loss_name] = loss_decode(seg_logit, seg_label, ignore_index=self.ignore_index) + self.kl_weight * kl
-                loss['kl_term'] = kl.detach().data
+                self.kl_vals.append(kl.item())
                 if loss_decode.loss_name.startswith("loss_edl"):
                     # load
                     logs = loss_decode.get_logs(seg_logit,
