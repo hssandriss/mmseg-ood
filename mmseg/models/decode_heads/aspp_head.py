@@ -223,7 +223,7 @@ class ASPPNfBllHead(NfBllBaseDecodeHead):
             return output, kl
         elif nsamples > 1 and self.density_type in ('full_normal', 'fact_normal'):
             L = self.density_estimation._L
-            import ipdb; ipdb.set_trace()
+            # import ipdb; ipdb.set_trace()
             z0 = self.density_estimation.sample_base(nsamples)
             zk = self.density_estimation.forward_normal(z0, L)
             kl = self.density_estimation.normal_kl_loss(L)

@@ -363,7 +363,7 @@ class DensityEstimation(nn.Module):
             elif type == 'householder_flow':
                 transforms = [HouseholderFlow(self.dim) for _ in range(self.flow_length)]
             elif type == 'nice_flow':
-                self.flow = [NiceFlow(self.dim, i // 2, i == (self.flow_length - 1)) for i in range(self.flow_length)]
+                transforms = [NiceFlow(self.dim, i // 2, i == (self.flow_length - 1)) for i in range(self.flow_length)]
             else:
                 raise NotImplementedError
             if self.use_bn:
@@ -381,10 +381,9 @@ class DensityEstimation(nn.Module):
             # Target distribution parameters
             self.mu = nn.Parameter(torch.zeros(self.dim), requires_grad=True)
             cov_numel = int(self.dim * (self.dim + 1) / 2)
-            self.L_diag_elements = nn.Parameter(torch.zeros(self.dim), requires_grad=True)
-            self.L_udiag_elements = nn.Parameter(torch.ones(cov_numel - self.dim), requires_grad=True) * 1e-5
-            self.udiag_idx = torch.tril_indices(self.dim, self.dim, -1)
-            self.diag_idx = torch.vstack((torch.arange(self.dim), torch.arange(self.dim)))
+            self.L_diag_elements = nn.Parameter(torch.ones(self.dim), requires_grad=True)
+            self.L_udiag_elements = nn.Parameter(torch.ones(cov_numel - self.dim) * 1e-5, requires_grad=True)
+            # import ipdb; ipdb.set_trace()
         elif self.density_type == 'fact_normal':
             # Reparametrization distribution N(0, I)
             self.z0_mean = nn.Parameter(torch.zeros(self.dim), requires_grad=False)
@@ -392,8 +391,7 @@ class DensityEstimation(nn.Module):
             # Target distribution parameters
             self.mu = nn.Parameter(torch.zeros(self.dim), requires_grad=True)
             cov_numel = int(self.dim)
-            self.L_diag_elements = nn.Parameter(torch.zeros(int(cov_numel)), requires_grad=True)
-            self.diag_idx = torch.vstack((torch.arange(self.dim), torch.arange(self.dim)))
+            self.L_diag_elements = nn.Parameter(torch.ones(int(cov_numel)), requires_grad=True)
         else:
             raise NotImplementedError
 
@@ -406,6 +404,7 @@ class DensityEstimation(nn.Module):
         """
         if self.density_type == 'full_normal':
             assert self.L_diag_elements.numel() + self.L_udiag_elements.numel() == int(self.dim * (self.dim + 1) / 2)
+            self._check_positive_definite(L)
             z = self.mu + z @ L
         elif self.density_type == 'fact_normal':
             assert self.L_diag_elements.numel() == self.dim
@@ -429,10 +428,11 @@ class DensityEstimation(nn.Module):
         return x, log_det
 
     def sample_base(self, n):
-        device = next(self.parameters()).device
-        std = torch.exp(.5 * self.z0_lvar)
-        eps = torch.randn(size=[n, self.dim], device=device)
-        z = eps.mul(std).add_(self.z0_mean)
+        with torch.no_grad():
+            device = next(self.parameters()).device
+            std = torch.exp(.5 * self.z0_lvar)
+            eps = torch.randn(size=[n, self.dim], device=device)
+            z = eps.mul(std).add_(self.z0_mean)
         return z
 
     def flow_kl_loss(self, z0, zk, ldjs):
@@ -480,11 +480,15 @@ class DensityEstimation(nn.Module):
 
     def _ldet_normal_cov(self, L):
         self._check_positive_definite(L)
-        return L.diag().prod().log()
+        return 2 * (L.diag().log().sum() + 1e-6)
+        # return (L.diag().prod() + 1e-6).log() * 2
+        # return torch.logdet(L) * 2
 
     def _check_positive_definite(self, L):
         # https://math.stackexchange.com/questions/462682/why-does-the-cholesky-decomposition-requires-a-positive-definite-matrix
-        assert (L.diag() > 0).all(), "The matrix L is not positive definite"
+        if not (L.diag() > 0).all():
+            import ipdb; ipdb.set_trace()
+        # assert (L.diag() > 0).all(), "The matrix L is not positive definite"
 
     @property
     def _L(self):
@@ -492,13 +496,13 @@ class DensityEstimation(nn.Module):
         Reconstructs Lower Triangular Matrix
         """
         full = True if self.density_type.startswith('full') else False
-        assert self.L_diag_elements.numel() == self.dim
         device = next(self.parameters()).device
-        L = torch.zeros((self.dim, self.dim)).to(device)
-        L[self.diag_idx[0, :], self.diag_idx[1, :]] = torch.exp(self.L_diag_elements) + 1e-05
+        assert self.L_diag_elements.numel() == self.dim
+        L = F.softplus(self.L_diag_elements).diag() + 1e-05 * torch.eye(self.dim).to(device)
         if full:
             assert self.L_udiag_elements.numel() == int(self.dim * (self.dim - 1) / 2)
-            L[self.udiag_idx[0, :], self.udiag_idx[1, :]] = self.L_udiag_elements
+            udiag_idx = torch.tril_indices(self.dim, self.dim, -1).to(device)
+            L[udiag_idx[0, :], udiag_idx[1, :]] = self.L_udiag_elements
         return L
 
 
