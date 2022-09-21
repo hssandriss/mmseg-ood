@@ -27,7 +27,10 @@ class ParseEpochToDecodeHeadHook(Hook):
             if runner.model.module.decode_head.epoch_num != runner.epoch:
                 import ipdb; ipdb.set_trace()
         if hasattr(runner.model.module.decode_head, "kl_vals"):
+            assert all(runner.model.module.decode_head.kl_weights[0] == w for w in runner.model.module.decode_head.kl_weights[1:])
+            print_log(f"KL weight: {float(np.mean(runner.model.module.decode_head.kl_weights)):.2f}")
             print_log(f"Avg Epoch KL term: {float(np.mean(runner.model.module.decode_head.kl_vals)):.2f}")
+            runner.model.module.decode_head.kl_weights = []
             runner.model.module.decode_head.kl_vals = []
 
     def before_train_epoch(self, runner):

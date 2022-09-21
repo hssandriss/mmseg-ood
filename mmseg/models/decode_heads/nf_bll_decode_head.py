@@ -13,6 +13,7 @@ import torch.nn.functional as F
 import torch.distributions as tdist
 import numpy as np
 import pyro
+import math
 
 "test w/: python tools/train.py configs/deeplabv3/deeplabv3_r50-d8_720x720_70e_cityscapes_nf_bll.py --experiment-tag 'TEST'"
 
@@ -129,7 +130,7 @@ class NfBllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         self.vi_nsamples_train = vi_nsamples_train
         self.vi_nsamples_test = vi_nsamples_test
         if self.density_type == 'flow':
-            if self.flow_type in ('iaf_flow', 'planar_flow', 'radial_flow', 'sylvester_flow'):
+            if self.flow_type in ('householder_flow', 'planar_flow', 'radial_flow', 'nice_flow'):
                 self.density_estimation = DensityEstimation(
                     dim=self.latent_dim,
                     density_type=self.density_type,
@@ -148,7 +149,9 @@ class NfBllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         self.w_numel, self.b_numel = self.conv_seg.weight.numel(), self.conv_seg.bias.numel()
         self.initial_p = torch.cat([self.conv_seg.weight.reshape(-1), self.conv_seg.bias.reshape(-1)]).detach()
         self.kl_vals = []
+        self.kl_weights = []
         self.epoch_num = 0
+        self.total_epochs = 70
 
     def update_z0_params(self):
         """
@@ -321,7 +324,14 @@ class NfBllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         for loss_decode in losses_decode:
             if loss_decode.loss_name not in loss:
                 # NLL
-                loss[loss_decode.loss_name] = loss_decode(seg_logit, seg_label, ignore_index=self.ignore_index) + self.kl_weight * kl
+                if self.kl_weight == 'step':
+                    kl_weight = float(torch.min(torch.tensor(1.0, dtype=torch.float32), torch.tensor(
+                        self.epoch_num / self.total_epochs, dtype=torch.float32)))
+                else:
+                    assert isinstance(self.kl_weight, float), "Invalid KL weights"
+                    kl_weight = self.kl_weight
+                loss[loss_decode.loss_name] = loss_decode(seg_logit, seg_label, ignore_index=self.ignore_index) + kl_weight * kl
+                self.kl_weights.append(kl_weight)
                 self.kl_vals.append(kl.item())
                 if loss_decode.loss_name.startswith("loss_edl"):
                     # load
@@ -351,7 +361,6 @@ class DensityEstimation(nn.Module):
             self.flow_length = kwargs.pop('flow_length', 2)
             self.flow_type = kwargs.pop('flow_type', 'planar_flow')
             self.use_bn = kwargs.pop('use_bn', False)
-
             # Base gaussian distribution
             self.z0_mean = nn.Parameter(torch.zeros(self.dim), requires_grad=False)
             self.z0_lvar = nn.Parameter(torch.zeros(self.dim), requires_grad=False)
@@ -360,9 +369,9 @@ class DensityEstimation(nn.Module):
                 transforms = [RadialFlow(self.dim) for _ in range(self.flow_length)]
             elif self.flow_type == 'planar_flow':
                 transforms = [PlanarFlow(self.dim) for _ in range(self.flow_length)]
-            elif type == 'householder_flow':
+            elif self.flow_type == 'householder_flow':
                 transforms = [HouseholderFlow(self.dim) for _ in range(self.flow_length)]
-            elif type == 'nice_flow':
+            elif self.flow_type == 'nice_flow':
                 transforms = [NiceFlow(self.dim, i // 2, i == (self.flow_length - 1)) for i in range(self.flow_length)]
             else:
                 raise NotImplementedError
@@ -519,7 +528,9 @@ def log_normal_standard(x, average=False, reduce=True, dim=None):
 
 
 def log_normal_diag(x, mean, log_var, average=False, reduce=True, dim=None):
-    log_norm = -0.5 * (log_var + (x - mean) * (x - mean) * log_var.exp().reciprocal())
+    # log_norm = -0.5 * (log_var + (x - mean) * (x - mean) * (-log_var).exp())
+    log_norm = 0.5 * (-(x - mean) ** 2) * (-log_var).exp() - log_var - 2 * math.log(math.sqrt(2 * math.pi))
+
     if reduce:
         if average:
             return torch.mean(log_norm, dim)
@@ -603,10 +614,58 @@ class PlanarFlow(nn.Module):
         u = self.u + (m(inner) - inner) * self.w / self.w.norm()**2
         activation = (self.w * x).sum(dim=1, keepdim=True) + self.b
         x = x + u * h(activation)
+
         psi = h_prime(activation) * self.w
         log_det = torch.log(torch.abs(1. + (u * psi).sum(dim=1, keepdim=True)))
 
         return x, log_det
+
+
+class PlanarFlow(nn.Module):
+    """Implementation of the invertible transformation used in planar flow:
+        f(z) = z + u * h(dot(w.T, z) + b)
+    See Section 4.1 in https://arxiv.org/pdf/1505.05770.pdf. 
+    """
+
+    def __init__(self, dim: int = 2):
+        """Initialise weights and bias.
+
+        Args:
+            dim: Dimensionality of the distribution to be estimated.
+        """
+        super().__init__()
+        self.w = nn.Parameter(torch.randn(1, dim).normal_(0, 0.1))
+        self.b = nn.Parameter(torch.randn(1).normal_(0, 0.1))
+        self.u = nn.Parameter(torch.randn(1, dim).normal_(0, 0.1))
+
+    def forward(self, z):
+        if torch.mm(self.u, self.w.T) < -1:
+            self.get_u_hat()
+        a = torch.mm(z, self.w.T) + self.b
+        psi = (1 - torch.tanh(a) ** 2) * self.w
+        log_det = torch.log(1e-4 + (1 + torch.mm(self.u, psi.T)).abs())
+
+        return z + self.u * torch.tanh(a), log_det
+
+    # def log_det_J(self, z):
+    #     if torch.mm(self.u, self.w.T) < -1:
+    #         self.get_u_hat()
+    #     a = torch.mm(z, self.w.T) + self.b
+    #     psi = (1 - torch.tanh(a) ** 2) * self.w
+    #     abs_det = (1 + torch.mm(self.u, psi.T)).abs()
+    #     log_det = torch.log(1e-4 + abs_det)
+
+    #     return log_det
+
+    def get_u_hat(self) -> None:
+        """Enforce w^T u >= -1. When using h(.) = tanh(.), this is a sufficient condition 
+        for invertibility of the transformation f(z). See Appendix A.1.
+        """
+        wtu = torch.mm(self.u, self.w.T)
+        m_wtu = -1 + torch.log(1 + torch.exp(wtu))
+        self.u.data = (
+            self.u + (m_wtu - wtu) * self.w / torch.norm(self.w, p=2, dim=1) ** 2
+        )
 
 
 class RadialFlow(nn.Module):
