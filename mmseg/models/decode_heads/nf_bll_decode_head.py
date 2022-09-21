@@ -575,50 +575,50 @@ class BatchNormFlow(nn.Module):
         return x, log_det
 
 
-class PlanarFlow(nn.Module):
-    def __init__(self, dim):
-        """Instantiates one step of planar flow.
+# class PlanarFlow(nn.Module):
+#     def __init__(self, dim):
+#         """Instantiates one step of planar flow.
 
-        Reference:
-        Variational Inference with Normalizing Flows
-        Danilo Jimenez Rezende, Shakir Mohamed
-        (https://arxiv.org/abs/1505.05770)
+#         Reference:
+#         Variational Inference with Normalizing Flows
+#         Danilo Jimenez Rezende, Shakir Mohamed
+#         (https://arxiv.org/abs/1505.05770)
 
-        Args:
-            dim: input dimensionality.
-        """
-        super(PlanarFlow, self).__init__()
+#         Args:
+#             dim: input dimensionality.
+#         """
+#         super(PlanarFlow, self).__init__()
 
-        self.u = nn.Parameter(torch.randn(1, dim))
-        self.w = nn.Parameter(torch.randn(1, dim))
-        self.b = nn.Parameter(torch.randn(1))
+#         self.u = nn.Parameter(torch.randn(1, dim))
+#         self.w = nn.Parameter(torch.randn(1, dim))
+#         self.b = nn.Parameter(torch.randn(1))
 
-    def forward(self, x):
-        """Forward pass.
+#     def forward(self, x):
+#         """Forward pass.
 
-        Args:
-            x: input tensor (B x D).
-        Returns:
-            transformed x and log-determinant of Jacobian.
-        """
-        def m(x):
-            return F.softplus(x) - 1.
+#         Args:
+#             x: input tensor (B x D).
+#         Returns:
+#             transformed x and log-determinant of Jacobian.
+#         """
+#         def m(x):
+#             return F.softplus(x) - 1.
 
-        def h(x):
-            return torch.tanh(x)
+#         def h(x):
+#             return torch.tanh(x)
 
-        def h_prime(x):
-            return 1. - h(x)**2
+#         def h_prime(x):
+#             return 1. - h(x)**2
 
-        inner = (self.w * self.u).sum()
-        u = self.u + (m(inner) - inner) * self.w / self.w.norm()**2
-        activation = (self.w * x).sum(dim=1, keepdim=True) + self.b
-        x = x + u * h(activation)
+#         inner = (self.w * self.u).sum()
+#         u = self.u + (m(inner) - inner) * self.w / self.w.norm()**2
+#         activation = (self.w * x).sum(dim=1, keepdim=True) + self.b
+#         x = x + u * h(activation)
 
-        psi = h_prime(activation) * self.w
-        log_det = torch.log(torch.abs(1. + (u * psi).sum(dim=1, keepdim=True)))
+#         psi = h_prime(activation) * self.w
+#         log_det = torch.log(torch.abs(1. + (u * psi).sum(dim=1, keepdim=True)))
 
-        return x, log_det
+#         return x, log_det
 
 
 class PlanarFlow(nn.Module):
@@ -646,16 +646,6 @@ class PlanarFlow(nn.Module):
         log_det = torch.log(1e-4 + (1 + torch.mm(self.u, psi.T)).abs())
 
         return z + self.u * torch.tanh(a), log_det
-
-    # def log_det_J(self, z):
-    #     if torch.mm(self.u, self.w.T) < -1:
-    #         self.get_u_hat()
-    #     a = torch.mm(z, self.w.T) + self.b
-    #     psi = (1 - torch.tanh(a) ** 2) * self.w
-    #     abs_det = (1 + torch.mm(self.u, psi.T)).abs()
-    #     log_det = torch.log(1e-4 + abs_det)
-
-    #     return log_det
 
     def get_u_hat(self) -> None:
         """Enforce w^T u >= -1. When using h(.) = tanh(.), this is a sufficient condition 
