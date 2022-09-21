@@ -163,6 +163,7 @@ def single_gpu_test(model,
                         for sample in range(probs.shape[0]):
                             plot_conf(probs[sample, :, :, :].max(dim=0)[0].cpu().numpy(),
                                       out_file[: -4] + f"_sm_conf_sample_{sample}" + out_file[-4:])
+                        plot_conf(probs.mean(dim=0).max(dim=0)[0].cpu().numpy(), out_file[: -4] + f"_sm_mean" + out_file[-4:])
                         plot_conf(probs.var(dim=0).max(dim=0)[0].cpu().numpy(), out_file[: -4] + f"_sm_var" + out_file[-4:])
                         plot_conf(probs.max(dim=1)[0].var(dim=0).cpu().numpy(), out_file[: -4] + f"_sm_var_1" + out_file[-4:])
 
@@ -199,7 +200,7 @@ def single_gpu_test(model,
                                                      model.module.decode_head.bags_kwargs)
             result = [(result_seg, result_oth)]
             results.extend(result)
-            # pass
+            pass
         else:
             results.extend(result)
 

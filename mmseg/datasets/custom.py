@@ -291,7 +291,7 @@ class CustomDataset(Dataset):
         num_cls = seg_logit.shape[1]
 
         seg_gt_tensor_flat = torch.from_numpy(seg_gt).type(torch.long).flatten()  # [W, H] => [WxH]
-        seg_logit_flat = seg_logit.flatten(2, -1).squeeze().permute(1, 0)  # [1, K, W, H] => [WxH, K]
+        seg_logit_flat = seg_logit.mean(dim=0, keepdim=True).flatten(2, -1).squeeze().permute(1, 0)  # [1, K, W, H] => [WxH, K]
         if self.ignore_index:
             ignore_bg_mask = (seg_gt_tensor_flat == self.ignore_index)  # ignore bg pixels
         else:
@@ -312,9 +312,11 @@ class CustomDataset(Dataset):
                                ((alpha - 1.0) * torch.digamma(alpha)).sum(1, keepdim=True))
                 seg_u = u.squeeze()
             else:
-                probs = F.softmax(seg_logit_flat, dim=1)
+                probs = F.softmax(seg_logit, dim=1).mean(dim=0, keepdim=True).flatten(2, -1).squeeze().permute(1, 0)
                 seg_max_prob = probs.max(dim=1)[0]
                 seg_max_logit = seg_logit_flat.max(dim=1)[0]
+                # probs_ = probs.clone()
+                # probs_[probs_ <= 0] = 1e-8
                 seg_entropy = - (probs * probs.log()).sum(1)
                 seg_u = torch.ones_like(seg_max_prob) - seg_max_prob
             # seg_pred_all_other = torch.zeros_like(seg_logit_flat, dtype=torch.bool)
