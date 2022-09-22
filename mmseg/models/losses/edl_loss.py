@@ -234,8 +234,8 @@ class EDLLoss(nn.Module):
             if np.mean(self.epoch_nums) % 1 != 0:
                 import ipdb; ipdb.set_trace()
             # print_log(f"Temp: {self.temp[self.epoch_num_]}")
-            print_log(f"Lam: {self.lam_schedule[self.epoch_num_]}")
-            print_log(f"Epoch {self.epoch_num_} is done with {self.iter_cnt} iterations")
+            # print_log(f"Lam: {self.lam_schedule[self.epoch_num_]}")
+            # print_log(f"Epoch {self.epoch_num_} is done with {self.iter_cnt} iterations")
             self.iter_cnt = 0
             self.epoch_nums = []
         reduction = (reduction_override if reduction_override else self.reduction)
@@ -372,7 +372,7 @@ class EDLLoss(nn.Module):
             if mask_cls.any():
                 logs[f"mean_target_cls_{c}_ev"] = cls_ev[mask_cls].mean()
             else:
-                logs[f"mean_target_cls_{c}_ev"] = torch.tensor(0.)
+                logs[f"mean_target_cls_{c}_ev"] = torch.tensor(0., device=alpha.device)
         logs["mean_max_ev"] = evidence.max(dim=1, keepdim=True)[0].mean()
 
         logs["mean_L_err"] = self.last_A

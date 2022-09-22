@@ -12,6 +12,7 @@ from mmcv.runner import get_dist_info
 import seaborn as sns; sns.set_theme()
 import matplotlib.pyplot as plt
 from sklearn.metrics import confusion_matrix
+import joblib
 
 
 def np2tmp(array, temp_file_name=None, tmpdir=None):
@@ -189,11 +190,11 @@ def single_gpu_test(model,
                 if hasattr(dataset, "ood_indices"):
                     plot_mask((seg_gt == dataset.ood_indices[0]).astype(np.uint8), out_file[:-4] + "_ood_mask" + out_file[-4:])
 
-        if efficient_test:
-            result = [np2tmp(_, tmpdir='.efficient_test') for _ in result]
+        # if efficient_test:
+        #     result = [np2tmp(_, tmpdir='.efficient_test') for _ in result]
 
-        if format_only:
-            result = dataset.format_results(result, indices=batch_indices, **format_args)
+        # if format_only:
+        #     result = dataset.format_results(result, indices=batch_indices, **format_args)
 
         if pre_eval:
             # TODO: adapt samples_per_gpu > 1.
@@ -303,7 +304,10 @@ def multi_gpu_test(model,
 
     for batch_indices, data in zip(loader_indices, data_loader):
         with torch.no_grad():
-            result = model(return_loss=False, rescale=True, **data)
+            result, seg_logit = model(return_loss=False, rescale=True, **data)
+
+        seg_logit = seg_logit.detach()
+        seg_gt = dataset.get_gt_seg_map_by_idx_and_reduce_zero_label(batch_indices[0])
 
         if efficient_test:
             result = [np2tmp(_, tmpdir='.efficient_test') for _ in result]
@@ -314,9 +318,35 @@ def multi_gpu_test(model,
         if pre_eval:
             # TODO: adapt samples_per_gpu > 1.
             # only samples_per_gpu=1 valid now
-            result = dataset.pre_eval(result, indices=batch_indices)
-
-        results.extend(result)
+            # result = dataset.pre_eval(result, indices=batch_indices)
+            result_seg = dataset.pre_eval(result, indices=batch_indices)[0]
+            # For added metrics OOD, calibration
+            if not model.module.decode_head.use_bags:
+                if model.module.decode_head.loss_decode.loss_name.startswith("loss_edl"):
+                    # For EDL probs
+                    def logit2alpha(x):
+                        ev = model.module.decode_head.loss_decode.logit2evidence(x) + 1
+                        if model.module.decode_head.loss_decode.pow_alpha:
+                            ev = ev**2
+                        return ev
+                    result_oth = dataset.pre_eval_custom(seg_logit, seg_gt, "edl", logit_fn=logit2alpha)
+                else:
+                    if model.module.decode_head.loss_decode.use_softplus:
+                        def logit2prob(x):
+                            return F.softplus(x) / F.softplus(x).sum(dim=1, keepdim=True)
+                    else:
+                        def logit2prob(x):
+                            return F.softmax(x, dim=1)
+                    # For softmax probs
+                    result_oth = dataset.pre_eval_custom(seg_logit, seg_gt, "softmax", logit_fn=logit2prob)
+            else:
+                result_oth = dataset.pre_eval_custom(seg_logit, seg_gt, "softmax",
+                                                     model.module.decode_head.use_bags,
+                                                     model.module.decode_head.bags_kwargs)
+            result = [(result_seg, result_oth)]
+            results.extend(result)
+        else:
+            results.extend(result)
 
         if rank == 0:
             batch_size = len(result) * world_size
