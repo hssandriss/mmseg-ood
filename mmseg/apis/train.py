@@ -12,7 +12,7 @@ from mmcv.runner import (HOOKS, DistSamplerSeedHook, EpochBasedRunner,
 from mmcv.utils import build_from_cfg
 
 from mmseg import digit_version
-from mmseg.core import DistEvalHook, EvalHook, ParseEpochToLossHook, TensorboardLoggerHook_, TextLoggerHook_, build_optimizer
+from mmseg.core import DistEvalHook, EvalHook, ParseEpochToLossHook, TensorboardLoggerHook_, TextLoggerHook_, EMAHook_, build_optimizer
 from mmseg.datasets import build_dataloader, build_dataset
 from mmseg.utils import (build_ddp, build_dp, find_latest_checkpoint,
                          get_root_logger)
@@ -154,6 +154,7 @@ def train_segmentor(model,
                                        cfg.get('momentum_config', None))
 
     runner.register_hook(ParseEpochToLossHook(), priority='HIGHEST')
+    # runner.register_hook(EMAHook_(interval=1, momentum=0.99), priority='HIGHEST')
     if distributed:
         # when distributed training by epoch, using`DistSamplerSeedHook` to set
         # the different seed to distributed sampler for each epoch, it will

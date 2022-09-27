@@ -11,6 +11,7 @@ from mmcv.image import tensor2imgs
 from mmcv.runner import get_dist_info
 import seaborn as sns; sns.set_theme()
 import matplotlib.pyplot as plt
+from ..utils import diss
 from sklearn.metrics import confusion_matrix
 import joblib
 
@@ -175,11 +176,14 @@ def single_gpu_test(model,
                 if not model.module.decode_head.use_bags:
                     if model.module.decode_head.loss_decode.loss_name.startswith("loss_edl"):
                         num_cls = seg_logit.shape[1]
-                        seg_evidence = model.module.decode_head.loss_decode.logit2evidence(seg_logit)
-                        alpha = seg_evidence + 1
+                        alpha = model.module.decode_head.loss_decode.logit2evidence(seg_logit) + 1
+                        if model.module.decode_head.loss_decode.pow_alpha:
+                            alpha = alpha**2
                         probs = alpha / alpha.sum(dim=1, keepdim=True)
                         u = num_cls / alpha.sum(dim=1, keepdim=True)
-                        plot_conf(1 - u.cpu().numpy(), out_file[: -4] + "_edl_1_minus_u" + out_file[-4:])
+                        dissonance = diss(alpha)
+                        plot_conf(u.cpu().numpy(), out_file[: -4] + "_edl_u" + out_file[-4:])
+                        plot_conf(dissonance.cpu().numpy(), out_file[: -4] + "_edl_diss" + out_file[-4:])
                         plot_conf(probs.max(dim=1)[0].cpu().numpy(), out_file[: -4] + "_edl_conf" + out_file[-4:])
                     else:
                         probs = F.softmax(seg_logit, dim=1)
@@ -190,11 +194,11 @@ def single_gpu_test(model,
                 if hasattr(dataset, "ood_indices"):
                     plot_mask((seg_gt == dataset.ood_indices[0]).astype(np.uint8), out_file[:-4] + "_ood_mask" + out_file[-4:])
 
-        # if efficient_test:
-        #     result = [np2tmp(_, tmpdir='.efficient_test') for _ in result]
+        if efficient_test:
+            result = [np2tmp(_, tmpdir='.efficient_test') for _ in result]
 
-        # if format_only:
-        #     result = dataset.format_results(result, indices=batch_indices, **format_args)
+        if format_only:
+            result = dataset.format_results(result, indices=batch_indices, **format_args)
 
         if pre_eval:
             # TODO: adapt samples_per_gpu > 1.

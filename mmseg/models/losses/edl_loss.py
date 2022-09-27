@@ -96,10 +96,12 @@ def ce_edl_loss(one_hot_gt, alpha, num_classes, func, bis=False, with_var=False,
         A_ = torch.sum((1 - one_hot_gt) * (func(strength) - func(strength - alpha)), axis=1, keepdims=True)
         A = A + A_
     if with_var:
-        B = torch.sum(alpha * (strength - alpha) / (strength * strength * (strength + 1)), dim=1, keepdim=True)
-        A = A - B
+        fake_alphas = alpha * (1 - one_hot_gt) + one_hot_gt
+        fake_strength = fake_alphas.sum(dim=1, keepdim=True)
+        B = torch.sum((fake_alphas * (fake_strength - fake_alphas)) / (fake_strength * fake_strength * (fake_strength + 1)), dim=1, keepdim=True)  # var
+        A = A - B  # increase var
     if reg:
-        A = A + 0.001 * (strength - (one_hot_gt * alpha).sum(dim=1, keepdims=True))
+        A = A + 0.01 * (strength - (one_hot_gt * alpha).sum(dim=1, keepdims=True))
 
     # L_kl
     # alpha_kl = (alpha - 1) * (1 - one_hot_gt) + 1
@@ -145,10 +147,10 @@ def EUC(alpha, one_hot_gt, num_classes):
     return accurate_match * acc_uncertain, (1 - accurate_match) * inacc_certain
 
 
-def lam(epoch_num, total_epochs, annealing_start, annealing_step, annealing_method):
+def lam(epoch_num, total_epochs, annealing_start, annealing_step, annealing_method, annealing_from):
     if annealing_method == 'step':
         annealing_coef = torch.min(torch.tensor(1.0, dtype=torch.float32), torch.tensor(
-            epoch_num / annealing_step, dtype=torch.float32))
+            max(epoch_num - annealing_from, 0) / annealing_step, dtype=torch.float32)) * 0.1
     elif annealing_method == 'exp':
         annealing_coef = annealing_start * torch.exp(-torch.log(annealing_start) / (total_epochs - 1) * epoch_num)
     elif annealing_method == 'zero':
@@ -165,7 +167,7 @@ def lam(epoch_num, total_epochs, annealing_start, annealing_step, annealing_meth
 @ LOSSES.register_module
 class EDLLoss(nn.Module):
 
-    def __init__(self, num_classes, loss_variant="mse", annealing_step=10, annealing_method="step", annealing_from=1, total_epochs=70,
+    def __init__(self, num_classes, loss_variant="mse", annealing_step=10, annealing_method="zero", annealing_from=1, total_epochs=70,
                  annealing_start=0.01, logit2evidence="exp", regularization="kld", reduction="mean", loss_weight=1.0, pow_alpha=False,
                  avg_non_ignore=True, loss_name='loss_edl'):
         super(EDLLoss, self).__init__()
@@ -203,7 +205,8 @@ class EDLLoss(nn.Module):
         # import ipdb; ipdb.set_trace()
         self.lam_schedule = []
         for epoch in range(self.total_epochs):
-            self.lam_schedule.append(lam(epoch, self.total_epochs, self.annealing_start, self.annealing_step, self.annealing_method))
+            self.lam_schedule.append(lam(epoch, self.total_epochs, self.annealing_start,
+                                     self.annealing_step, self.annealing_method, self.annealing_from))
         # if self.annealing_method != 'zero':
         #     assert self.lam_schedule[-1].allclose(torch.tensor(1.)), "Please check you schedule!"
         self.pow_alpha = pow_alpha
@@ -234,8 +237,8 @@ class EDLLoss(nn.Module):
             if np.mean(self.epoch_nums) % 1 != 0:
                 import ipdb; ipdb.set_trace()
             # print_log(f"Temp: {self.temp[self.epoch_num_]}")
-            # print_log(f"Lam: {self.lam_schedule[self.epoch_num_]}")
-            # print_log(f"Epoch {self.epoch_num_} is done with {self.iter_cnt} iterations")
+            print_log(f"Lam: {self.lam_schedule[self.epoch_num_]}")
+            print_log(f"Epoch {self.epoch_num_} is done with {self.iter_cnt} iterations")
             self.iter_cnt = 0
             self.epoch_nums = []
         reduction = (reduction_override if reduction_override else self.reduction)
@@ -358,8 +361,11 @@ class EDLLoss(nn.Module):
         max_prob, pred_cls = torch.max(prob.data.clone(), dim=1, keepdim=True)
         gt_cls = target.data.unsqueeze(1).clone()
         mask_ignore = (gt_cls == ignore_index)
+
         succ = torch.logical_and((pred_cls == gt_cls), ~mask_ignore)
         fail = torch.logical_and(~(pred_cls == gt_cls), ~mask_ignore)
+        logs["mean_dir_var"] = torch.where(mask_ignore, torch.zeros_like(var), var).sum() / (~mask_ignore).sum()
+        logs["mean_dir_fake_var"] = torch.where(mask_ignore, torch.zeros_like(var), var).sum() / (~mask_ignore).sum()
         logs["mean_ev_sum"] = evidence.sum(dim=1, keepdim=True).mean()
         logs["mean_fail_ev_sum"] = (evidence.sum(dim=1, keepdim=True) * fail).sum() / (fail.sum() + EPS)
         logs["mean_succ_ev_sum"] = (evidence.sum(dim=1, keepdim=True) * succ).sum() / (succ.sum() + EPS)
@@ -390,6 +396,13 @@ class EDLLoss(nn.Module):
         max_prob_flat = max_prob.permute(1, 0, 2, 3).flatten(1, -1).squeeze()
         u_flat = u.permute(1, 0, 2, 3).flatten(1, -1).squeeze()
         logs["avg_max_prob_u_corr"] = torchmetrics.functional.pearson_corrcoef(max_prob_flat, u_flat)
+
+        # one_hot_gt = torch.zeros_like(pred, dtype=torch.uint8).scatter_(1, gt_cls_, 1)
+        # fake_alphas = alpha * (1 - one_hot_gt) + one_hot_gt
+        # fake_strength = alpha.sum(dim=1, keepdim=True)
+        # fake_var = torch.sum((fake_alphas * (fake_strength - fake_alphas)
+        #                       ) / (fake_strength * fake_strength * (fake_strength + 1)), dim=1, keepdim=True)
+        # logs["mean_dir_fake_var"] = torch.where(mask_ignore, torch.zeros_like(fake_var), fake_var).sum() / (~mask_ignore).sum()
         return logs
 
     # @ property

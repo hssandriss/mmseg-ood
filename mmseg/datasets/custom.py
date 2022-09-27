@@ -305,9 +305,10 @@ class CustomDataset(Dataset):
                 alpha = logit_fn(seg_logit_flat)
                 strength = alpha.sum(dim=1, keepdim=True)
                 u = num_cls / strength
-                disonnance = diss(alpha)
+
                 probs = alpha / strength
                 seg_max_prob = probs.max(dim=1)[0]
+                disonnance = diss(alpha)
                 seg_max_logit = seg_logit_flat.max(dim=1)[0]
                 seg_u = u.squeeze()
                 seg_emp_entropy = - (probs * probs.log()).sum(1)
@@ -590,7 +591,7 @@ class CustomDataset(Dataset):
             raise KeyError('metric {} is not supported'.format(metric))
         sl_ood_valid = True
         reg_ood_valid = True
-        in_dist_valid = True
+        in_dist_valid = False if self.__class__.__name__ == 'RoadAnomalyDataset' else True
         eval_results = {}
         # test a list of files
         if mmcv.is_list_of(results, np.ndarray) or mmcv.is_list_of(results, str):
@@ -658,7 +659,7 @@ class CustomDataset(Dataset):
         ret_metrics_class.update({'Class': class_names})
         ret_metrics_class.move_to_end('Class', last=False)
         # valid update
-        in_dist_valid = all([not np.isnan(v) for k, v in ret_metrics_summary.items() if k in default_metrics])
+        # in_dist_valid = all([not np.isnan(v) for k, v in ret_metrics_summary.items() if k in default_metrics])
         reg_ood_valid = all([not np.isnan(v) for v in regular_ood_metrics_summary.values()]) and len(regular_ood_metrics_summary) > 0
         sl_ood_valid = all([not np.isnan(v) for v in sl_ood_metrics_summary.values()]) and len(sl_ood_metrics_summary) > 0
 
