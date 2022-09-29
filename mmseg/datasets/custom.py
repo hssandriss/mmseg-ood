@@ -311,6 +311,14 @@ class CustomDataset(Dataset):
                 disonnance = diss(alpha)
                 seg_max_logit = seg_logit_flat.max(dim=1)[0]
                 seg_u = u.squeeze()
+                ########## uncertainty maximization ##########
+                evi = alpha - 1
+                bel = evi / strength
+                proj_prob = bel + u * (1 / num_cls)
+                um_u = torch.min(num_cls * proj_prob, dim=1, keepdim=True)[0]
+                um_bel = proj_prob - um_u * (1 / num_cls)
+                seg_um_u = um_u.squeeze()
+                ##############################################
                 seg_emp_entropy = - (probs * probs.log()).sum(1)
                 seg_dir_entropy = (torch.lgamma(alpha).sum(1, keepdim=True) - torch.lgamma(strength) -
                                    (num_cls - strength) * torch.digamma(strength) -
@@ -380,6 +388,10 @@ class CustomDataset(Dataset):
                     auroc_u, aupr_u, fpr_u = self.evaluate_ood(out_scores_u, in_scores_u)
                     u_ood = np.array([auroc_u, aupr_u, fpr_u])
 
+                    out_scores_um_u, in_scores_um_u = self.get_in_out_conf(seg_um_u.cpu().numpy(), seg_gt_tensor_flat.cpu().numpy(), "vacuity")
+                    auroc_um_u, aupr_um_u, fpr_um_u = self.evaluate_ood(out_scores_um_u, in_scores_um_u)
+                    um_u_ood = np.array([auroc_um_u, aupr_um_u, fpr_um_u])
+
                     out_scores_dir_entr, in_scores_dir_entr = self.get_in_out_conf(
                         seg_dir_entropy.cpu().numpy(), seg_gt_tensor_flat.cpu().numpy(), "entropy")
                     auroc_dir_entr, aupr_dir_entr, fpr_dir_entr = self.evaluate_ood(out_scores_dir_entr, in_scores_dir_entr)
@@ -387,15 +399,16 @@ class CustomDataset(Dataset):
                 else:
                     dissonance_ood = np.array([NA, NA, NA])
                     u_ood = np.array([NA, NA, NA])
+                    um_u_ood = np.array([NA, NA, NA])
                     dir_entr_ood = np.array([NA, NA, NA])
 
                 corr_max_prob_u = np.array([pearson_corrcoef(seg_max_prob, seg_u)])
-                ood_metrics = (np.hstack((probs_ood, logit_ood, emp_entr_ood, u_ood, dissonance_ood, dir_entr_ood, corr_max_prob_u)), True)
+                ood_metrics = (np.hstack((probs_ood, logit_ood, emp_entr_ood, u_ood, um_u_ood, dissonance_ood, dir_entr_ood, corr_max_prob_u)), True)
             else:
-                ood_metrics = (np.array([NA for _ in range(6 * 3 + 1)]), False)
+                ood_metrics = (np.array([NA for _ in range(7 * 3 + 1)]), False)
         else:
             # Puts nans otherwise
-            ood_metrics = (np.array([NA for _ in range(6 * 3 + 1)]), False)
+            ood_metrics = (np.array([NA for _ in range(7 * 3 + 1)]), False)
 
         # Calibration/Confidence metrics for closed set
         if not hasattr(self, "ood_indices") or self.mixed:
@@ -633,7 +646,8 @@ class CustomDataset(Dataset):
         ret_metrics.pop('aBrierScore', None)
         ret_metrics.pop("aCorrMaxprobU", None)
         regular_ood_metrics = [f"{a}.{b}" for a in ("max_prob", "max_logit", "emp_entropy") for b in ("auroc", "aupr", "fpr95")]
-        sl_ood_metrics = [f"{a}.{b}" for a in ("u", "disonnance", "dir_entropy") for b in ("auroc", "aupr", "fpr95")] + ["ood_corr_max_prob_u"]
+        sl_ood_metrics = [f"{a}.{b}" for a in ("u", "um_u", "disonnance", "dir_entropy")
+                          for b in ("auroc", "aupr", "fpr95")] + ["ood_corr_max_prob_u"]
         # remove ood metrics ret_metrics_summary
         for k in regular_ood_metrics:
             ret_metrics_summary.pop(k, None)
