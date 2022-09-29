@@ -3,6 +3,12 @@ from typing import Optional
 
 from mmcv.parallel import is_module_wrapper
 from mmcv.runner import HOOKS, Hook
+import numpy as np
+from mmcv.utils import print_log
+
+
+def exp_schedule(epoch, total_epochs, lo=0.0002, hi=1.):
+    return max(min(np.exp(np.log(lo) * epoch / (total_epochs - 1)), lo), hi)
 
 
 @HOOKS.register_module()
@@ -31,15 +37,16 @@ class EMAHook_(Hook):
     def __init__(self,
                  momentum: float = 0.0002,
                  interval: int = 1,
-                 warm_up: int = 100,
+                 warm_up: int = 100,  # iters
                  resume_from: Optional[str] = None):
         assert isinstance(interval, int) and interval > 0
         self.warm_up = warm_up
         self.interval = interval
-        assert momentum > 0 and momentum < 1
+        # assert momentum > 0 and momentum < 1
         # self.momentum = momentum**interval
-        self.momentum = momentum
+        # self.momentum = momentum
         self.checkpoint = resume_from
+        # self.schedule = lambda epoch, total_epochs: np.exp(np.log(0.0002) * epoch / (total_epochs - 1))
 
     def before_run(self, runner):
         """
@@ -70,6 +77,7 @@ class EMAHook_(Hook):
         curr_step = runner.iter
         # We warm up the momentum considering the instability at beginning
         momentum = min(self.momentum, (1 + curr_step) / (self.warm_up + curr_step))
+        # momentum = self.momentum
         if curr_step % self.interval != 0:
             return
         for name, parameter in self.model_parameters.items():
@@ -89,6 +97,8 @@ class EMAHook_(Hook):
         We recover model's parameter from ema backup after last epoch's EvalHook.
         """
         self._swap_ema_parameters()
+        self.momentum = exp_schedule(runner.epoch, runner._max_epochs, lo=0.0002, hi=1.)
+        print_log(f"EMA momentum: {self.momentum}")
 
     def _swap_ema_parameters(self):
         """Swap the parameter of model with parameter in ema_buffer."""

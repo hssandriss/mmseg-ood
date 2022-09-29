@@ -237,8 +237,8 @@ class EDLLoss(nn.Module):
             if np.mean(self.epoch_nums) % 1 != 0:
                 import ipdb; ipdb.set_trace()
             # print_log(f"Temp: {self.temp[self.epoch_num_]}")
-            print_log(f"Lam: {self.lam_schedule[self.epoch_num_]}")
-            print_log(f"Epoch {self.epoch_num_} is done with {self.iter_cnt} iterations")
+            # print_log(f"Lam: {self.lam_schedule[self.epoch_num_]}")
+            # print_log(f"Epoch {self.epoch_num_} is done with {self.iter_cnt} iterations")
             self.iter_cnt = 0
             self.epoch_nums = []
         reduction = (reduction_override if reduction_override else self.reduction)
