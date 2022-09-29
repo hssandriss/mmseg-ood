@@ -68,7 +68,6 @@ class EMAHook_(Hook):
         Here Buffer Parameters are updated no model parameters
         """
         curr_step = runner.iter
-        import ipdb; ipdb.set_trace()
         # We warm up the momentum considering the instability at beginning
         momentum = min(self.momentum, (1 + curr_step) / (self.warm_up + curr_step))
         if curr_step % self.interval != 0:
@@ -76,8 +75,7 @@ class EMAHook_(Hook):
         for name, parameter in self.model_parameters.items():
             buffer_name = self.param_ema_buffer[name]
             buffer_parameter = self.model_buffers[buffer_name]
-            # curr= (1-m)*prev + m*current
-            import ipdb; ipdb.set_trace()
+            # current= (1-m)*prev + m*current
             buffer_parameter.mul_(1 - momentum).add_(momentum * parameter.data)
 
     def after_train_epoch(self, runner):
