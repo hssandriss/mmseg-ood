@@ -621,6 +621,92 @@ class BatchNormFlow(nn.Module):
 #         return x, log_det
 
 
+class cPlanarFlow(nn.Module):
+    def __init__(self, dim):
+        """Instantiates one step of planar flow.
+
+        Args:
+            dim: input dimensionality.
+        """
+        super(cPlanarFlow, self).__init__()
+
+        self.linear_u = nn.Linear(dim, dim)
+        self.linear_w = nn.Linear(dim, dim)
+        self.linear_b = nn.Linear(dim, 1)
+
+    def forward(self, x, v):
+        """Forward pass.
+
+        Args:
+            x: input tensor (B x D).
+            v: output from last layer of encoder (B x D).
+        Returns:
+            transformed x and log-determinant of Jacobian.
+        """
+        u, w, b = self.linear_u(v), self.linear_w(v), self.linear_b(v)
+
+        def m(x):
+            return F.softplus(x) - 1.
+
+        def h(x):
+            return torch.tanh(x)
+
+        def h_prime(x):
+            return 1. - h(x)**2
+
+        inner = (w * u).sum(dim=1, keepdim=True)
+        u = u + (m(inner) - inner) * w / (w * w).sum(dim=1, keepdim=True)
+        activation = (w * x).sum(dim=1, keepdim=True) + b
+        x = x + u * h(activation)
+        psi = h_prime(activation) * w
+        log_det = torch.log(torch.abs(1. + (u * psi).sum(dim=1, keepdim=True)))
+
+        return x, v, log_det
+
+
+class cRadialFlow(nn.Module):
+    def __init__(self, dim):
+        """Instantiates one step of radial flow.
+
+        Args:
+            dim: input dimensionality.
+        """
+        super(cRadialFlow, self).__init__()
+
+        self.linear_a = nn.Linear(dim, 1)
+        self.linear_b = nn.Linear(dim, 1)
+        self.linear_c = nn.Linear(dim, dim)
+        self.d = dim
+
+    def forward(self, x, v):
+        """Forward pass.
+
+        Args:
+            x: input tensor (B x D).
+            v: output from last layer of encoder (B x D).
+        Returns:
+            transformed x and log-determinant of Jacobian.
+        """
+        a, b, c = self.linear_a(v), self.linear_b(v), self.linear_c(v)
+
+        def m(x):
+            return F.softplus(x)
+
+        def h(r):
+            return 1. / (a + r)
+
+        def h_prime(r):
+            return -h(r)**2
+
+        a = torch.exp(a)
+        b = -a + m(b)
+        r = (x - c).norm(dim=1, keepdim=True)
+        tmp = b * h(r)
+        x = x + tmp * (x - c)
+        log_det = (self.d - 1) * torch.log(1. + tmp) + torch.log(1. + tmp + b * h_prime(r) * r)
+
+        return x, v, log_det
+
 class PlanarFlow(nn.Module):
     """Implementation of the invertible transformation used in planar flow:
         f(z) = z + u * h(dot(w.T, z) + b)
