@@ -14,6 +14,8 @@ import matplotlib.pyplot as plt
 from ..utils import diss
 from sklearn.metrics import confusion_matrix
 import joblib
+from mmcv.parallel import is_module_wrapper
+from mmrazor.models.algorithms.base import BaseAlgorithm
 
 
 def np2tmp(array, temp_file_name=None, tmpdir=None):
@@ -173,7 +175,7 @@ def single_gpu_test(model,
                     opacity=opacity)
 
                 # max prob confidence map
-                if not model.module.decode_head.use_bags:
+                if not getattr(model.module.decode_head, 'use_bags', False):
                     if model.module.decode_head.loss_decode.loss_name.startswith("loss_edl"):
                         num_cls = seg_logit.shape[1]
                         alpha = model.module.decode_head.loss_decode.logit2evidence(seg_logit) + 1
@@ -206,17 +208,26 @@ def single_gpu_test(model,
             # For originally included metrics mIOU
             result_seg = dataset.pre_eval(result, indices=batch_indices)[0]
             # For added metrics OOD, calibration
-            if not model.module.decode_head.use_bags:
-                if model.module.decode_head.loss_decode.loss_name.startswith("loss_edl"):
+            if is_module_wrapper(model):
+                _model = model.module
+            else:
+                _model = model
+
+            # If using mmrazor
+            if isinstance(_model, BaseAlgorithm):
+                _model = _model.architecture.model
+
+            if not getattr(_model.decode_head, 'use_bags', False):
+                if _model.decode_head.loss_decode.loss_name.startswith("loss_edl"):
                     # For EDL probs
                     def logit2alpha(x):
-                        ev = model.module.decode_head.loss_decode.logit2evidence(x) + 1
-                        if model.module.decode_head.loss_decode.pow_alpha:
+                        ev = _model.decode_head.loss_decode.logit2evidence(x) + 1
+                        if _model.decode_head.loss_decode.pow_alpha:
                             ev = ev**2
                         return ev
                     result_oth = dataset.pre_eval_custom(seg_logit, seg_gt, "edl", logit_fn=logit2alpha)
                 else:
-                    if model.module.decode_head.loss_decode.use_softplus:
+                    if _model.decode_head.loss_decode.use_softplus:
                         def logit2prob(x):
                             return F.softplus(x) / F.softplus(x).sum(dim=1, keepdim=True)
                     else:

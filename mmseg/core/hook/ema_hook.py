@@ -8,7 +8,7 @@ from mmcv.utils import print_log
 
 
 def exp_schedule(epoch, total_epochs, lo=0.0002, hi=1.):
-    return max(min(np.exp(np.log(lo) * epoch / (total_epochs - 1)), lo), hi)
+    return min(max(np.exp(np.log(lo) * epoch / (total_epochs - 1)), lo), hi)
 
 
 @HOOKS.register_module()
