@@ -158,9 +158,12 @@ def single_gpu_test(model,
                 else:
                     out_file = None
                 # Todo implement bg mask and set it to transparent color
+                ign_mask = (seg_gt == dataset.ignore_index).astype(np.uint8)
+                _result = result[0]
+                _result = np.ma.array(_result, mask=ign_mask)
                 model.module.show_result(
                     img_show,
-                    result,
+                    [_result],
                     palette=dataset.PALETTE,
                     show=show,
                     out_file=out_file,
@@ -184,12 +187,19 @@ def single_gpu_test(model,
                         probs = alpha / alpha.sum(dim=1, keepdim=True)
                         u = num_cls / alpha.sum(dim=1, keepdim=True)
                         dissonance = diss(alpha)
-                        plot_conf(u.cpu().numpy(), out_file[: -4] + "_edl_u" + out_file[-4:])
-                        plot_conf(dissonance.cpu().numpy(), out_file[: -4] + "_edl_diss" + out_file[-4:])
-                        plot_conf(probs.max(dim=1)[0].cpu().numpy(), out_file[: -4] + "_edl_conf" + out_file[-4:])
+
+                        plot_conf(np.ma.array(u.cpu().numpy(), mask=ign_mask),
+                                  out_file[: -4] + "_edl_u" + out_file[-4:])
+                        plot_conf(np.ma.array(dissonance.cpu().numpy(), mask=ign_mask),
+                                  out_file[: -4] + "_edl_diss" + out_file[-4:])
+                        plot_conf(np.ma.array(probs.max(dim=1)[0].cpu().numpy(), mask=ign_mask),
+
+                                  out_file[: -4] + "_edl_conf" + out_file[-4:])
                     else:
                         probs = F.softmax(seg_logit, dim=1)
-                        plot_conf(probs.max(dim=1)[0].cpu().numpy(), out_file[: -4] + "_sm_conf" + out_file[-4:])
+                        plot_conf(np.ma.array(probs.max(dim=1)[0].cpu().numpy(), mask=ign_mask),
+                                  out_file[: -4] + "_sm_conf" + out_file[-4:])
+
                 # Mask for edges between separate labels
                 plot_mask(dataset.edge_detector(seg_gt).cpu().numpy(), out_file[: -4] + "_edge_mask" + out_file[-4:])
                 # Mask of ood samples
@@ -328,25 +338,33 @@ def multi_gpu_test(model,
             result = [np2tmp(_, tmpdir='.efficient_test') for _ in result]
 
         if format_only:
-            result = dataset.format_results(
-                result, indices=batch_indices, **format_args)
+            result = dataset.format_results(result, indices=batch_indices, **format_args)
         if pre_eval:
             # TODO: adapt samples_per_gpu > 1.
             # only samples_per_gpu=1 valid now
             # result = dataset.pre_eval(result, indices=batch_indices)
             result_seg = dataset.pre_eval(result, indices=batch_indices)[0]
+            if is_module_wrapper(model):
+                _model = model.module
+            else:
+                _model = model
+
+            # If using mmrazor
+            if isinstance(_model, BaseAlgorithm):
+                _model = _model.architecture.model
+
             # For added metrics OOD, calibration
-            if not model.module.decode_head.use_bags:
-                if model.module.decode_head.loss_decode.loss_name.startswith("loss_edl"):
+            if not getattr(_model.decode_head, 'use_bags', False):
+                if _model.decode_head.loss_decode.loss_name.startswith("loss_edl"):
                     # For EDL probs
                     def logit2alpha(x):
-                        ev = model.module.decode_head.loss_decode.logit2evidence(x) + 1
-                        if model.module.decode_head.loss_decode.pow_alpha:
+                        ev = _model.decode_head.loss_decode.logit2evidence(x) + 1
+                        if _model.decode_head.loss_decode.pow_alpha:
                             ev = ev**2
                         return ev
                     result_oth = dataset.pre_eval_custom(seg_logit, seg_gt, "edl", logit_fn=logit2alpha)
                 else:
-                    if model.module.decode_head.loss_decode.use_softplus:
+                    if _model.decode_head.loss_decode.use_softplus:
                         def logit2prob(x):
                             return F.softplus(x) / F.softplus(x).sum(dim=1, keepdim=True)
                     else:
@@ -356,8 +374,8 @@ def multi_gpu_test(model,
                     result_oth = dataset.pre_eval_custom(seg_logit, seg_gt, "softmax", logit_fn=logit2prob)
             else:
                 result_oth = dataset.pre_eval_custom(seg_logit, seg_gt, "softmax",
-                                                     model.module.decode_head.use_bags,
-                                                     model.module.decode_head.bags_kwargs)
+                                                     _model.decode_head.use_bags,
+                                                     _model.decode_head.bags_kwargs)
             result = [(result_seg, result_oth)]
             results.extend(result)
         else:

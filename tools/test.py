@@ -442,6 +442,12 @@ def main():
                 curr_res["iter"] = all_checkpoints_iter[i]
                 ans.append(curr_res)
 
+    print("For latex:")
+    # import ipdb; ipdb.set_trace()
+    print(f"{reg_ood_summary.loc[i, 'max_prob.auroc']}/{reg_ood_summary.loc[i, 'max_logit.auroc']}/{reg_ood_summary.loc[i, 'emp_entropy.auroc']}/{sl_ood_summary.loc[i, 'u.auroc']}/{sl_ood_summary.loc[i, 'disonnance.auroc']}"
+          f"&{reg_ood_summary.loc[i, 'max_prob.aupr']}/{reg_ood_summary.loc[i, 'max_logit.aupr']}/{reg_ood_summary.loc[i, 'emp_entropy.aupr']}/{sl_ood_summary.loc[i, 'u.aupr']}/{sl_ood_summary.loc[i, 'disonnance.aupr']}"
+          f"&{reg_ood_summary.loc[i, 'max_prob.fpr95']}/{reg_ood_summary.loc[i, 'max_logit.fpr95']}/{reg_ood_summary.loc[i, 'emp_entropy.fpr95']}/{sl_ood_summary.loc[i, 'u.fpr95']}/{sl_ood_summary.loc[i, 'disonnance.fpr95']}")
+
     suffixe = re.search(r"(?:[0-9]{14})_(.*)$", args.work_dir).groups()[0]
     with open(os.path.join(args.work_dir, f"test_results_all_{suffixe}.json" if args.all else f"test_results_{suffixe}.json"), "w") as f:
         json.dump(ans, f)

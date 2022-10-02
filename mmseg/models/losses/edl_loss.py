@@ -92,16 +92,20 @@ def ce_edl_loss(one_hot_gt, alpha, num_classes, func, bis=False, with_var=False,
     strength = torch.sum(alpha, dim=1, keepdim=True)
     # L_err
     A = torch.sum(one_hot_gt * (func(strength) - func(alpha)), axis=1, keepdims=True)
+    B = torch.zeros_like(A.detach())
     if bis:
-        A_ = torch.sum((1 - one_hot_gt) * (func(strength) - func(strength - alpha)), axis=1, keepdims=True)
-        A = A + A_
+        B = torch.sum((1 - one_hot_gt) * (func(strength) - func(strength - alpha)), axis=1, keepdims=True)
+        # A = A + A_
     if with_var:
         fake_alphas = alpha * (1 - one_hot_gt) + one_hot_gt
         fake_strength = fake_alphas.sum(dim=1, keepdim=True)
-        B = torch.sum((fake_alphas * (fake_strength - fake_alphas)) / (fake_strength * fake_strength * (fake_strength + 1)), dim=1, keepdim=True)  # var
-        A = A - B  # increase var
+        B = torch.sum(
+            (fake_alphas * (fake_strength - fake_alphas)) / (fake_strength * fake_strength * (fake_strength + 1)),
+            dim=1, keepdim=True)  # fake var
+        B = - 0.1 * B.log()  # increase var
     if reg:
-        A = A + 0.01 * (strength - (one_hot_gt * alpha).sum(dim=1, keepdims=True))
+        # Larger coef cause difficulty to learn some classes
+        B = 0.001 * (strength - (one_hot_gt * alpha).sum(dim=1, keepdims=True))
 
     # L_kl
     # alpha_kl = (alpha - 1) * (1 - one_hot_gt) + 1
@@ -116,7 +120,7 @@ def ce_edl_loss(one_hot_gt, alpha, num_classes, func, bis=False, with_var=False,
     # L_EUC
     D, E = EUC(alpha, one_hot_gt, num_classes)
 
-    return A, C, D, E
+    return A, B, C, D, E
 
 
 def KL(alpha, num_classes):
@@ -267,52 +271,52 @@ class EDLLoss(nn.Module):
             else:
                 raise NotImplementedError
         elif self.loss_name.endswith("ce"):  # Eq. 4 CrossEntropy
-            A, C, D, E = ce_edl_loss(one_hot_gt, alpha, self.num_classes, func=torch.digamma)
+            A, B, C, D, E = ce_edl_loss(one_hot_gt, alpha, self.num_classes, func=torch.digamma)
             if self.regularization == 'kld':
-                loss = A + self.lam_schedule[self.epoch_num] * C
+                loss = A + B + self.lam_schedule[self.epoch_num] * C
             elif self.regularization == 'euc':
                 # D: acc_uncertain, E: inacc_certain
-                loss = A + self.lam_schedule[self.epoch_num] * D + (1. - self.lam_schedule[self.epoch_num]) * E
+                loss = A + B + self.lam_schedule[self.epoch_num] * D + (1. - self.lam_schedule[self.epoch_num]) * E
             elif self.regularization == 'none':
-                loss = A
+                loss = A + B
             else:
                 raise NotImplementedError
         elif self.loss_name.endswith("mll"):  # Eq. 3 Maximum Likelihood Type II
-            A, C, D, E = ce_edl_loss(one_hot_gt, alpha, self.num_classes, func=torch.log)
+            A, B, C, D, E = ce_edl_loss(one_hot_gt, alpha, self.num_classes, func=torch.log)
             if self.regularization == 'kld':
-                loss = A + self.lam_schedule[self.epoch_num] * C
+                loss = A + B + self.lam_schedule[self.epoch_num] * C
             elif self.regularization == 'euc':
                 # D: acc_uncertain, E: inacc_certain
-                loss = A + self.lam_schedule[self.epoch_num] * D + (1. - self.lam_schedule[self.epoch_num]) * E
+                loss = A + B + self.lam_schedule[self.epoch_num] * D + (1. - self.lam_schedule[self.epoch_num]) * E
             elif self.regularization == 'none':
-                loss = A
+                loss = A + B
         elif self.loss_name.endswith("mll_bis"):  # Eq. 3 Maximum Likelihood Type II
-            A, C, D, E = ce_edl_loss(one_hot_gt, alpha, self.num_classes, func=torch.log, bis=True)
+            A, B, C, D, E = ce_edl_loss(one_hot_gt, alpha, self.num_classes, func=torch.log, bis=True)
             if self.regularization == 'kld':
-                loss = A + self.lam_schedule[self.epoch_num] * C
+                loss = A + B + self.lam_schedule[self.epoch_num] * C
             elif self.regularization == 'euc':
                 # D: acc_uncertain, E: inacc_certain
-                loss = A + self.lam_schedule[self.epoch_num] * D + (1. - self.lam_schedule[self.epoch_num]) * E
+                loss = A + B + self.lam_schedule[self.epoch_num] * D + (1. - self.lam_schedule[self.epoch_num]) * E
             elif self.regularization == 'none':
-                loss = A
+                loss = A + B
         elif self.loss_name.endswith("mll_var"):  # Eq. 3 Maximum Likelihood Type II
-            A, C, D, E = ce_edl_loss(one_hot_gt, alpha, self.num_classes, func=torch.log, bis=False, with_var=True)
+            A, B, C, D, E = ce_edl_loss(one_hot_gt, alpha, self.num_classes, func=torch.log, bis=False, with_var=True)
             if self.regularization == 'kld':
-                loss = A + self.lam_schedule[self.epoch_num] * C
+                loss = A + B + self.lam_schedule[self.epoch_num] * C
             elif self.regularization == 'euc':
                 # D: acc_uncertain, E: inacc_certain
-                loss = A + self.lam_schedule[self.epoch_num] * D + (1. - self.lam_schedule[self.epoch_num]) * E
+                loss = A + B + self.lam_schedule[self.epoch_num] * D + (1. - self.lam_schedule[self.epoch_num]) * E
             elif self.regularization == 'none':
-                loss = A
+                loss = A + B
         elif self.loss_name.endswith("mll_reg"):  # Eq. 3 Maximum Likelihood Type II
-            A, C, D, E = ce_edl_loss(one_hot_gt, alpha, self.num_classes, func=torch.log, bis=False, with_var=False, reg=True)
+            A, B, C, D, E = ce_edl_loss(one_hot_gt, alpha, self.num_classes, func=torch.log, bis=False, with_var=False, reg=True)
             if self.regularization == 'kld':
-                loss = A + self.lam_schedule[self.epoch_num] * C
+                loss = A + B + self.lam_schedule[self.epoch_num] * C
             elif self.regularization == 'euc':
                 # D: acc_uncertain, E: inacc_certain
-                loss = A + self.lam_schedule[self.epoch_num] * D + (1. - self.lam_schedule[self.epoch_num]) * E
+                loss = A + B + self.lam_schedule[self.epoch_num] * D + (1. - self.lam_schedule[self.epoch_num]) * E
             elif self.regularization == 'none':
-                loss = A
+                loss = A + B
 
         else:
             raise NotImplementedError
@@ -330,6 +334,8 @@ class EDLLoss(nn.Module):
 
         self.last_A = A.detach()
         self.last_A = torch.where(mask_ignore, torch.zeros_like(self.last_A), self.last_A).sum() / avg_factor
+        self.last_B = B.detach()
+        self.last_B = torch.where(mask_ignore, torch.zeros_like(self.last_B), self.last_B).sum() / avg_factor
         self.last_C = C.detach()
         self.last_C = torch.where(mask_ignore, torch.zeros_like(self.last_C), self.last_C).sum() / avg_factor
         self.last_D = D.detach()
@@ -337,9 +343,6 @@ class EDLLoss(nn.Module):
         self.last_E = E.detach()
         self.last_E = torch.where(mask_ignore, torch.zeros_like(self.last_E), self.last_E).sum() / avg_factor
 
-        if self.loss_name.endswith("mse"):
-            self.last_B = B.detach()
-            self.last_B = torch.where(mask_ignore, torch.zeros_like(self.last_B), self.last_B).sum() / avg_factor
         self.epoch_num_ = self.epoch_num
         self.iter_cnt += 1
         self.epoch_nums.append(self.epoch_num)
@@ -365,7 +368,7 @@ class EDLLoss(nn.Module):
         succ = torch.logical_and((pred_cls == gt_cls), ~mask_ignore)
         fail = torch.logical_and(~(pred_cls == gt_cls), ~mask_ignore)
         logs["mean_dir_var"] = torch.where(mask_ignore, torch.zeros_like(var), var).sum() / (~mask_ignore).sum()
-        logs["mean_dir_fake_var"] = torch.where(mask_ignore, torch.zeros_like(var), var).sum() / (~mask_ignore).sum()
+        # logs["mean_dir_fake_var"] = torch.where(mask_ignore, torch.zeros_like(var), var).sum() / (~mask_ignore).sum()
         logs["mean_ev_sum"] = evidence.sum(dim=1, keepdim=True).mean()
         logs["mean_fail_ev_sum"] = (evidence.sum(dim=1, keepdim=True) * fail).sum() / (fail.sum() + EPS)
         logs["mean_succ_ev_sum"] = (evidence.sum(dim=1, keepdim=True) * succ).sum() / (succ.sum() + EPS)
@@ -381,12 +384,12 @@ class EDLLoss(nn.Module):
                 logs[f"mean_target_cls_{c}_ev"] = torch.tensor(0., device=alpha.device)
         logs["mean_max_ev"] = evidence.max(dim=1, keepdim=True)[0].mean()
 
-        logs["mean_L_err"] = self.last_A
-        if self.loss_name.endswith("mse"):
-            logs["mean_L_var"] = self.last_B
-        logs["mean_L_kl"] = self.last_C
-        logs["mean_acc_uncertain"] = self.last_D
-        logs["mean_inacc_certain"] = self.last_E
+        logs["mean_L0_A"] = self.last_A
+        # if self.loss_name.endswith("mse"):
+        logs["mean_L1_B"] = self.last_B
+        logs["mean_L_kl_C"] = self.last_C
+        logs["mean_acc_uncertain_D"] = self.last_D
+        logs["mean_inacc_certain_E"] = self.last_E
 
         logs["avg_max_prob"] = (max_prob * ~mask_ignore).sum() / ((~mask_ignore).sum() + EPS)
         logs["avg_uncertainty"] = (u * ~mask_ignore).sum() / ((~mask_ignore).sum() + EPS)
