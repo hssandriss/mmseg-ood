@@ -6,7 +6,7 @@ from mmcv.cnn import ConvModule
 from mmseg.ops import resize
 from ..builder import HEADS
 from .decode_head import BaseDecodeHead
-from .nf_bll_decode_head import NfBllBaseDecodeHead
+from .bll_decode_head import BllBaseDecodeHead
 
 import time
 
@@ -106,6 +106,7 @@ class ASPPHead(BaseDecodeHead):
                 H, W) which is feature map for last layer of decoder head.
         """
         x = self._transform_inputs(inputs)
+        import ipdb; ipdb.set_trace()
         aspp_outs = [
             resize(
                 self.image_pool(x),
@@ -128,7 +129,7 @@ class ASPPHead(BaseDecodeHead):
 
 
 @HEADS.register_module()
-class ASPPNfBllHead(NfBllBaseDecodeHead):
+class ASPPBllHead(BllBaseDecodeHead):
     """Rethinking Atrous Convolution for Semantic Image Segmentation.
 
     This head is the implementation of `DeepLabV3
@@ -140,7 +141,7 @@ class ASPPNfBllHead(NfBllBaseDecodeHead):
     """
 
     def __init__(self, dilations=(1, 6, 12, 18), **kwargs):
-        super(ASPPNfBllHead, self).__init__(**kwargs)
+        super(ASPPBllHead, self).__init__(**kwargs)
         assert isinstance(dilations, (list, tuple))
         self.dilations = dilations
         self.image_pool = nn.Sequential(
@@ -180,9 +181,10 @@ class ASPPNfBllHead(NfBllBaseDecodeHead):
                 H, W) which is feature map for last layer of decoder head.
         """
         x = self._transform_inputs(inputs)
+        low_feats = self.image_pool(x)
         aspp_outs = [
             resize(
-                self.image_pool(x),
+                low_feats,
                 size=x.size()[2:],
                 mode='bilinear',
                 align_corners=self.align_corners)
@@ -190,14 +192,15 @@ class ASPPNfBllHead(NfBllBaseDecodeHead):
         aspp_outs.extend(self.aspp_modules(x))
         aspp_outs = torch.cat(aspp_outs, dim=1)
         feats = self.bottleneck(aspp_outs)
-        return feats
+        return feats, low_feats.squeeze()
 
     def forward(self, inputs, nsamples):
         """Forward function."""
         # torch.cuda.synchronize()
         # t0 = time.time()
         with torch.no_grad():
-            output = self._forward_feature(inputs)
+            output, low_feats = self._forward_feature(inputs)
+        # print(output.shape)
         assert output.is_leaf, "you are backpropagating on feature extractor!"
         # torch.cuda.synchronize()
         # t1 = time.time()
@@ -211,6 +214,20 @@ class ASPPNfBllHead(NfBllBaseDecodeHead):
         elif nsamples > 1 and self.density_type == 'flow':
             z0 = self.density_estimation.sample_base(nsamples)
             zk, sum_log_jacobians = self.density_estimation.forward_flow(z0)
+            output = self.cls_seg(output, zk)
+            kl = self.density_estimation.flow_kl_loss(z0, zk, sum_log_jacobians)
+            # kl = self.density_estimation.flow_kl_loss_(sum_log_jacobians)
+            return output, kl
+        if nsamples == 1 and self.density_type == 'cflow':
+            z0 = self.density_estimation.z0_mean.data.unsqueeze(0)
+            zk, sum_log_jacobians = self.density_estimation.forward_cflow(z0, low_feats)
+            output = self.cls_seg(output, zk)
+            kl = self.density_estimation.flow_kl_loss(z0, zk, sum_log_jacobians)
+            # kl = self.density_estimation.flow_kl_loss_(sum_log_jacobians)
+            return output, kl
+        elif nsamples > 1 and self.density_type == 'cflow':
+            z0 = self.density_estimation.sample_base(nsamples)
+            zk, sum_log_jacobians = self.density_estimation.forward_cflow(z0, low_feats)
             output = self.cls_seg(output, zk)
             kl = self.density_estimation.flow_kl_loss(z0, zk, sum_log_jacobians)
             # kl = self.density_estimation.flow_kl_loss_(sum_log_jacobians)
