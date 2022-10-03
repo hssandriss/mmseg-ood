@@ -12,7 +12,7 @@ def exp_schedule(epoch, total_epochs, lo=0.0002, hi=1.):
 
 
 @HOOKS.register_module()
-class EMAHook_(Hook):
+class CustomEMAHook(Hook):
     r"""Exponential Moving Average Hook.
 
     Use Exponential Moving Average on all parameters of model in training

@@ -9,7 +9,7 @@ from .base_logger_hook import LoggerHook_
 
 
 @HOOKS.register_module()
-class TensorboardLoggerHook_(LoggerHook_):
+class CustomTensorboardLoggerHook(LoggerHook_):
     """Class to log metrics to Tensorboard.
     Args:
         log_dir (string): Save directory location. Default: None. If default

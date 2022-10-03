@@ -1,5 +1,6 @@
 from mmcv.runner.hooks import HOOKS, Hook
 from mmcv.utils import print_log
+import numpy as np
 
 
 @HOOKS.register_module()
@@ -31,9 +32,3 @@ class ParseEpochToLossHook(Hook):
                 import ipdb; ipdb.set_trace()
             runner.model.module.decode_head.epoch_num = runner.epoch
             runner.model.module.decode_head.total_epochs = runner._max_epochs
-
-    def before_iter(self, runner):
-        torch.autograd.set_detect_anomaly(True)
-
-    def after_iter(self, runner):
-        torch.autograd.set_detect_anomaly(False)

@@ -16,7 +16,7 @@ from .base_logger_hook import LoggerHook_
 
 
 @HOOKS.register_module()
-class TextLoggerHook_(LoggerHook_):
+class CustomTextLoggerHook(LoggerHook_):
     """Logger hook in text.
     In this logger hook, the information will be printed on terminal and
     saved in json file.

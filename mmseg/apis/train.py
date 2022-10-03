@@ -12,7 +12,7 @@ from mmcv.runner import (HOOKS, DistSamplerSeedHook, EpochBasedRunner,
 from mmcv.utils import build_from_cfg
 
 from mmseg import digit_version
-from mmseg.core import DistEvalHook, EvalHook, ParseEpochToLossHook, TensorboardLoggerHook_, TextLoggerHook_, EMAHook_, build_optimizer
+from mmseg.core import DistEvalHook, EvalHook, build_optimizer
 from mmseg.datasets import build_dataloader, build_dataset
 from mmseg.utils import (build_ddp, build_dp, find_latest_checkpoint,
                          get_root_logger)
@@ -118,7 +118,7 @@ def train_segmentor(model,
 
     # build runner
 
-    # Check if we are applying bayesian last layer
+    # Check if we are applying BLL
     is_bll = 'bll' in cfg.model.decode_head.type.lower()
 
     if is_bll:
@@ -158,21 +158,9 @@ def train_segmentor(model,
             not cfg.optimizer_config else cfg.optimizer_config
 
     # register hooks
-    epoch_logger = True if 'by_epoch' in cfg.log_config.keys() and cfg.log_config.get("by_epoch") else False
-    if epoch_logger:
-        runner.register_training_hooks(cfg.lr_config, cfg.optimizer_config,
-                                       cfg.checkpoint_config,  # cfg.log_config,
-                                       cfg.get('momentum_config', None))
-
-        runner.register_hook(TextLoggerHook_(**{k: v for k, v in cfg.log_config.items() if k != 'hooks'}))
-        runner.register_hook(TensorboardLoggerHook_(**{k: v for k, v in cfg.log_config.items() if k != 'hooks'}))
-    else:
-        runner.register_training_hooks(cfg.lr_config, cfg.optimizer_config,
-                                       cfg.checkpoint_config, cfg.log_config,
-                                       cfg.get('momentum_config', None))
-
-    runner.register_hook(ParseEpochToLossHook(), priority='HIGHEST')
-    # runner.register_hook(EMAHook_(), priority='HIGHEST')
+    runner.register_training_hooks(cfg.lr_config, cfg.optimizer_config,
+                                   cfg.checkpoint_config, cfg.log_config,
+                                   cfg.get('momentum_config', None))
 
     if distributed:
         # when distributed training by epoch, using`DistSamplerSeedHook` to set
@@ -224,25 +212,38 @@ def train_segmentor(model,
         if resume_from is not None:
             cfg.resume_from = resume_from
 
-    if cfg.resume_from:
+    if cfg.resume_from and is_bll:
         runner.resume(cfg.resume_from)
         runner.model.module.freeze_encoder()
         runner.model.module.freeze_feature_extractor()
-    elif cfg.load_from:
+    elif cfg.resume_from and not is_bll:
+        runner.resume(cfg.resume_from)
+    elif cfg.load_from and is_bll:
         runner.load_checkpoint(cfg.load_from)
+        runner.model.module.freeze_encoder()
+        runner.model.module.freeze_feature_extractor()
+        if runner.model.module.decode_head.initialize_at_w_map:
+            runner.model.module.decode_head.update_z0_params()
+    elif cfg.load_from and not is_bll:
+        runner.load_checkpoint(cfg.load_from)
+        if freeze_encoder and init_not_frozen:
+            ckpt = torch.load(cfg.load_from)
+            to_keep = [k for k in ckpt["state_dict"].keys() if k.startswith('backbone')]
+            to_delete = [k for k in ckpt["state_dict"].keys() if not k.startswith('backbone')]
+            for k in to_delete:
+                del ckpt["state_dict"][k]
+            cfg.load_from = os.path.join(cfg.work_dir, "src.pth")
+            torch.save(ckpt, cfg.load_from)
+        if freeze_features and init_not_frozen:
+            ckpt = torch.load(cfg.load_from)
+            to_delete = [k for k in ckpt["state_dict"].keys() if k.startswith("decode_head.conv_seg")]
+            to_keep = [k for k in ckpt["state_dict"].keys() if not k.startswith('decode_head.conv_seg')]
+            for k in to_delete:
+                del ckpt["state_dict"][k]
+            cfg.load_from = os.path.join(cfg.work_dir, "src.pth")
+            torch.save(ckpt, cfg.load_from)
+        runner.load_checkpoint(cfg.load_from)
+    else:
+        pass
 
-
-# << << << < HEAD
-#    runner.model.module.freeze_encoder()
-#     runner.model.module.freeze_feature_extractor()
-#     if runner.model.module.decode_head.initialize_at_w_map:
-#         runner.model.module.decode_head.update_z0_params()
-# == == == =
-#    if freeze_features:
-#         model.module.freeze_feature_extractor()
-#     if freeze_encoder:
-#         model.module.freeze_encoder()
-#     # torch.autograd.set_detect_anomaly(True)
-# >>>>>> > epoch_runner
-#    runner.run(data_loaders, cfg.workflow)
-#     # torch.autograd.set_detect_anomaly(False)
+    runner.run(data_loaders, cfg.workflow)
