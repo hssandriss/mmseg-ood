@@ -155,6 +155,9 @@ def lam(epoch_num, total_epochs, annealing_start, annealing_step, annealing_meth
     if annealing_method == 'step':
         annealing_coef = torch.min(torch.tensor(1.0, dtype=torch.float32), torch.tensor(
             max(epoch_num - annealing_from, 0) / annealing_step, dtype=torch.float32)) * 0.1
+    if annealing_method == 'step_a':
+        annealing_coef = torch.min(torch.tensor(1.0, dtype=torch.float32), torch.tensor(
+            epoch_num / (total_epochs / 2), dtype=torch.float32)) * 0.1
     elif annealing_method == 'exp':
         annealing_coef = annealing_start * torch.exp(-torch.log(annealing_start) / (total_epochs - 1) * epoch_num)
     elif annealing_method == 'zero':
