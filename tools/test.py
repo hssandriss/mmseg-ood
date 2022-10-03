@@ -231,8 +231,11 @@ def main():
     all_checkpoints = [os.path.join(args.work_dir, file) for file in os.listdir(args.work_dir) if file.endswith(".pth") and file != "latest.pth"]
     all_checkpoints.sort(key=lambda file: int(re.search(r"(?:epoch)_([0-9]+).(?:pth)$", osp.basename(file)).groups()[0]))
     all_checkpoints_iter = [int(re.search(r"(?:epoch)_([0-9]+).(?:pth)$", osp.basename(file)).groups()[0]) for file in all_checkpoints]
-    ood_summary = pd.DataFrame(columns=["epoch", 'max_prob.auroc', 'max_prob.aupr', 'max_prob.fpr95', 'u.auroc', 'u.aupr',
-                               'u.fpr95', 'max_logit.auroc', 'max_logit.aupr', 'max_logit.fpr95', 'entropy.auroc', 'entropy.aupr', 'entropy.fpr95'])
+    reg_ood_summary = pd.DataFrame(
+        columns=["epoch", 'max_prob.auroc', 'max_prob.aupr', 'max_prob.fpr95', 'max_logit.auroc', 'max_logit.aupr',
+                 'max_logit.fpr95', 'emp_entropy.auroc', 'emp_entropy.aupr', 'emp_entropy.fpr95'])
+    sl_ood_summary = pd.DataFrame(columns=["epoch", 'u.auroc', 'u.aupr', 'u.fpr95', 'disonnance.auroc',
+                                           'disonnance.aupr', 'disonnance.fpr95', 'dir_entropy.auroc', 'dir_entropy.aupr', 'dir_entropy.fpr95'])
 
     if not args.all:
         index_last = max(range(len(all_checkpoints_iter)), key=all_checkpoints_iter.__getitem__)
@@ -284,22 +287,6 @@ def main():
             ))
         else:
             setattr(model.decode_head, "use_bags", False)
-
-        if not args.all:
-            conv_layer_weight_mag = torch.norm(model.decode_head.conv_seg.weight.squeeze(), dim=1)
-            if args.use_bags:
-                conv_layer_weight_mag = torch.norm(model.decode_head.conv_seg.weight[:-dataset.num_bags, :, :].squeeze(), dim=1)
-            print("conv_seg layer weight magnitude")
-            print(conv_layer_weight_mag)
-            print("conv_seg layer weight magnitude max-min")
-            print(conv_layer_weight_mag.max() - conv_layer_weight_mag.min())
-            conv_layer_bias_mag = torch.norm(model.decode_head.conv_seg.bias.unsqueeze(1), dim=1)
-            if args.use_bags:
-                conv_layer_bias_mag = torch.norm(model.decode_head.conv_seg.bias[:-dataset.num_bags].unsqueeze(1), dim=1)
-            print("conv_seg layer bias magnitude")
-            print(conv_layer_bias_mag)
-            print("conv_seg layer bias magnitude max-min")
-            print(conv_layer_bias_mag.max() - conv_layer_bias_mag.min())
 
         # clean gpu memory when starting a new evaluation.
         torch.cuda.empty_cache()
@@ -384,48 +371,77 @@ def main():
                 eval_kwargs.update(metric=args.eval)
                 metric = dataset.evaluate(results, **eval_kwargs)
                 metric_dict = dict(config=args.config, metric=metric)
+                metric_dict["iter"] = all_checkpoints_iter[i]
                 mmcv.dump(metric_dict, json_file, indent=4)
                 if tmpdir is not None and eval_on_format_results:
                     # remove tmp dir when cityscapes evaluation
                     shutil.rmtree(tmpdir)
-                curr_iter_ood_df = pd.DataFrame(
-                    data=[[all_checkpoints_iter[i],
-                          round(float(metric_dict["metric"]['max_prob.auroc']), 2),
-                          round(float(metric_dict["metric"]['max_prob.aupr']), 2),
-                          round(float(metric_dict["metric"]['max_prob.fpr95']), 2),
-                          round(float(metric_dict["metric"]['u.auroc']), 2),
-                          round(float(metric_dict["metric"]['u.aupr']), 2),
-                          round(float(metric_dict["metric"]['u.fpr95']), 2),
-                          round(float(metric_dict["metric"]['max_logit.auroc']), 2),
-                          round(float(metric_dict["metric"]['max_logit.aupr']), 2),
-                          round(float(metric_dict["metric"]['max_logit.fpr95']), 2),
-                          round(float(metric_dict["metric"]['entropy.auroc']), 2),
-                          round(float(metric_dict["metric"]['entropy.aupr']), 2),
-                          round(float(metric_dict["metric"]['entropy.fpr95']), 2)]],
-                    columns=["epoch",
-                             'max_prob.auroc',
-                             'max_prob.aupr',
-                             'max_prob.fpr95',
-                             'u.auroc',
-                             'u.aupr',
-                             'u.fpr95',
-                             'max_logit.auroc',
-                             'max_logit.aupr',
-                             'max_logit.fpr95',
-                             'entropy.auroc',
-                             'entropy.aupr',
-                             'entropy.fpr95'
-                             ])
-                ood_summary = ood_summary.append(curr_iter_ood_df, ignore_index=True)
-                metric_dict["iter"] = all_checkpoints_iter[i]
-
                 curr_res = {}
-                for a in ("max_prob", "u", "max_logit", "entropy"):
-                    for b in ("auroc", "aupr", "fpr95"):
-                        curr_res[f"{a}.{b}"] = float(metric_dict['metric'][f"{a}.{b}"])
-                curr_res["mIoU"] = float(metric_dict['metric']["mIoU"])
-                curr_res["mAcc"] = float(metric_dict['metric']["mAcc"])
-                curr_res["aAcc"] = float(metric_dict['metric']["aAcc"])
+                reg_ood_valid = metric_dict['metric'].pop('reg_ood_valid', False)
+                sl_ood_valid = metric_dict['metric'].pop('sl_ood_valid', False)
+                in_dist_valid = metric_dict['metric'].pop('in_dist_valid', False)
+                if reg_ood_valid:
+                    curr_iter_reg_ood_df = pd.DataFrame(
+                        data=[[all_checkpoints_iter[i],
+                               round(float(metric_dict["metric"]['max_prob.auroc']), 2),
+                               round(float(metric_dict["metric"]['max_prob.aupr']), 2),
+                               round(float(metric_dict["metric"]['max_prob.fpr95']), 2),
+                               round(float(metric_dict["metric"]['max_logit.auroc']), 2),
+                               round(float(metric_dict["metric"]['max_logit.aupr']), 2),
+                               round(float(metric_dict["metric"]['max_logit.fpr95']), 2),
+                               round(float(metric_dict["metric"]['emp_entropy.auroc']), 2),
+                               round(float(metric_dict["metric"]['emp_entropy.aupr']), 2),
+                               round(float(metric_dict["metric"]['emp_entropy.fpr95']), 2)]],
+                        columns=["epoch",
+                                 'max_prob.auroc',
+                                 'max_prob.aupr',
+                                 'max_prob.fpr95',
+                                 'max_logit.auroc',
+                                 'max_logit.aupr',
+                                 'max_logit.fpr95',
+                                 'emp_entropy.auroc',
+                                 'emp_entropy.aupr',
+                                 'emp_entropy.fpr95'
+                                 ])
+                    reg_ood_summary = reg_ood_summary.append(curr_iter_reg_ood_df, ignore_index=True)
+
+                    for a in ("max_prob", "max_logit", "emp_entropy"):
+                        for b in ("auroc", "aupr", "fpr95"):
+                            curr_res[f"{a}.{b}"] = float(metric_dict['metric'][f"{a}.{b}"])
+                if sl_ood_valid:
+                    curr_iter_sl_ood_df = pd.DataFrame(
+                        data=[[all_checkpoints_iter[i],
+                               round(float(metric_dict["metric"]['u.auroc']), 2),
+                               round(float(metric_dict["metric"]['u.aupr']), 2),
+                               round(float(metric_dict["metric"]['u.fpr95']), 2),
+                               round(float(metric_dict["metric"]['disonnance.auroc']), 2),
+                               round(float(metric_dict["metric"]['disonnance.aupr']), 2),
+                               round(float(metric_dict["metric"]['disonnance.fpr95']), 2),
+                               round(float(metric_dict["metric"]['dir_entropy.auroc']), 2),
+                               round(float(metric_dict["metric"]['dir_entropy.aupr']), 2),
+                               round(float(metric_dict["metric"]['dir_entropy.fpr95']), 2)]],
+                        columns=["epoch",
+                                 'u.auroc',
+                                 'u.aupr',
+                                 'u.fpr95',
+                                 'disonnance.auroc',
+                                 'disonnance.aupr',
+                                 'disonnance.fpr95',
+                                 'dir_entropy.auroc',
+                                 'dir_entropy.aupr',
+                                 'dir_entropy.fpr95'
+                                 ])
+                    sl_ood_summary = sl_ood_summary.append(curr_iter_sl_ood_df, ignore_index=True)
+
+                    for a in ("u", "disonnance", "dir_entropy"):
+                        for b in ("auroc", "aupr", "fpr95"):
+                            curr_res[f"{a}.{b}"] = float(metric_dict['metric'][f"{a}.{b}"])
+
+                if in_dist_valid:
+                    curr_res["mIoU"] = float(metric_dict['metric']["mIoU"])
+                    curr_res["mAcc"] = float(metric_dict['metric']["mAcc"])
+                    curr_res["aAcc"] = float(metric_dict['metric']["aAcc"])
+
                 if args.all:
                     for k, v in curr_res.items():
                         writer.add_scalar(f"test/{k}", v, all_checkpoints_iter[i])
@@ -433,10 +449,23 @@ def main():
                 curr_res["iter"] = all_checkpoints_iter[i]
                 ans.append(curr_res)
 
+    print("For latex:")
+    # import ipdb; ipdb.set_trace()
+    if sl_ood_valid:
+        print(
+            f"{reg_ood_summary.loc[i, 'max_prob.auroc']}/{reg_ood_summary.loc[i, 'max_logit.auroc']}/{reg_ood_summary.loc[i, 'emp_entropy.auroc']}/{sl_ood_summary.loc[i, 'u.auroc']}/{sl_ood_summary.loc[i, 'disonnance.auroc']}"
+            f"&{reg_ood_summary.loc[i, 'max_prob.aupr']}/{reg_ood_summary.loc[i, 'max_logit.aupr']}/{reg_ood_summary.loc[i, 'emp_entropy.aupr']}/{sl_ood_summary.loc[i, 'u.aupr']}/{sl_ood_summary.loc[i, 'disonnance.aupr']}"
+            f"&{reg_ood_summary.loc[i, 'max_prob.fpr95']}/{reg_ood_summary.loc[i, 'max_logit.fpr95']}/{reg_ood_summary.loc[i, 'emp_entropy.fpr95']}/{sl_ood_summary.loc[i, 'u.fpr95']}/{sl_ood_summary.loc[i, 'disonnance.fpr95']}")
+    else:
+        print(
+            f"{reg_ood_summary.loc[i, 'max_prob.auroc']}/{reg_ood_summary.loc[i, 'max_logit.auroc']}/{reg_ood_summary.loc[i, 'emp_entropy.auroc']}/-.--/-.--"
+            f"&{reg_ood_summary.loc[i, 'max_prob.aupr']}/{reg_ood_summary.loc[i, 'max_logit.aupr']}/{reg_ood_summary.loc[i, 'emp_entropy.aupr']}/-.--/-.--"
+            f"&{reg_ood_summary.loc[i, 'max_prob.fpr95']}/{reg_ood_summary.loc[i, 'max_logit.fpr95']}/{reg_ood_summary.loc[i, 'emp_entropy.fpr95']}/-.--/-.--")
     suffixe = re.search(r"(?:[0-9]{14})_(.*)$", args.work_dir).groups()[0]
     with open(os.path.join(args.work_dir, f"test_results_all_{suffixe}.json" if args.all else f"test_results_{suffixe}.json"), "w") as f:
         json.dump(ans, f)
-    ood_summary.to_csv(os.path.join(args.work_dir, f'ood_metrics_{suffixe}.csv'))
+    reg_ood_summary.to_csv(os.path.join(args.work_dir, f'reg_ood_metrics_{suffixe}.csv'))
+    sl_ood_summary.to_csv(os.path.join(args.work_dir, f'sl_ood_metrics_{suffixe}.csv'))
 
 
 if __name__ == '__main__':

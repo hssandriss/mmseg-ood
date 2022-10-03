@@ -12,7 +12,7 @@ from mmcv.runner import (HOOKS, DistSamplerSeedHook, EpochBasedRunner,
 from mmcv.utils import build_from_cfg
 
 from mmseg import digit_version
-from mmseg.core import DistEvalHook, EvalHook, ParseEpochToDecodeHeadHook, TensorboardLoggerHook_, TextLoggerHook_, build_optimizer
+from mmseg.core import DistEvalHook, EvalHook, ParseEpochToLossHook, TensorboardLoggerHook_, TextLoggerHook_, EMAHook_, build_optimizer
 from mmseg.datasets import build_dataloader, build_dataset
 from mmseg.utils import (build_ddp, build_dp, find_latest_checkpoint,
                          get_root_logger)
@@ -117,10 +117,16 @@ def train_segmentor(model,
         model = build_dp(model, cfg.device, device_ids=cfg.gpu_ids)
 
     # build runner
-    optim_type = cfg.optimizer.pop('type')
-    assert optim_type == 'SGD', "currently just is supported"
-    optimizer = torch.optim.SGD(params=[p for name, p in model.named_parameters() if "density_estimation" in name], **cfg.optimizer)
-    # optimizer = build_optimizer(model, cfg.optimizer)
+
+    # Check if we are applying bayesian last layer
+    is_bll = 'bll' in cfg.model.decode_head.type.lower()
+
+    if is_bll:
+        optim_type = cfg.optimizer.pop('type')
+        assert optim_type == 'SGD', "currently just SGD is supported for BLL models"
+        optimizer = torch.optim.SGD(params=[p for name, p in model.named_parameters() if "density_estimation" in name], **cfg.optimizer)
+    else:
+        optimizer = build_optimizer(model, cfg.optimizer)
 
     if cfg.get('runner') is None:
         cfg.runner = {'type': 'IterBasedRunner', 'max_iters': cfg.total_iters}
@@ -128,9 +134,13 @@ def train_segmentor(model,
             'config is now expected to have a `runner` section, '
             'please set `runner` in your config.', UserWarning)
 
+    # Freeze up to last layer
     freeze_features = meta.pop("freeze_features", False)
+    # Freeze up the encoder
     freeze_encoder = meta.pop("freeze_encoder", False)
+    # reinitialize the last layer parameters
     init_not_frozen = meta.pop("init_not_frozen", False)
+
     assert not (freeze_encoder and freeze_features), "freeze encoder and freeze features are mutually exclusive"
     runner = build_runner(
         cfg.runner,
@@ -161,7 +171,9 @@ def train_segmentor(model,
                                        cfg.checkpoint_config, cfg.log_config,
                                        cfg.get('momentum_config', None))
 
-    runner.register_hook(ParseEpochToDecodeHeadHook(), priority='NORMAL')
+    runner.register_hook(ParseEpochToLossHook(), priority='HIGHEST')
+    # runner.register_hook(EMAHook_(), priority='HIGHEST')
+
     if distributed:
         # when distributed training by epoch, using`DistSamplerSeedHook` to set
         # the different seed to distributed sampler for each epoch, it will
@@ -204,7 +216,9 @@ def train_segmentor(model,
             priority = hook_cfg.pop('priority', 'NORMAL')
             hook = build_from_cfg(hook_cfg, HOOKS)
             runner.register_hook(hook, priority=priority)
-    assert cfg.load_from or cfg.resume_from, "It is required to pre-learned features"
+    if is_bll:
+        assert cfg.load_from or cfg.resume_from, "It is required to pre-learned features for BLL"
+
     if cfg.resume_from is None and cfg.get('auto_resume'):
         resume_from = find_latest_checkpoint(cfg.work_dir)
         if resume_from is not None:
@@ -216,8 +230,19 @@ def train_segmentor(model,
         runner.model.module.freeze_feature_extractor()
     elif cfg.load_from:
         runner.load_checkpoint(cfg.load_from)
-        runner.model.module.freeze_encoder()
-        runner.model.module.freeze_feature_extractor()
-        if runner.model.module.decode_head.initialize_at_w_map:
-            runner.model.module.decode_head.update_z0_params()
-    runner.run(data_loaders, cfg.workflow)
+
+
+# << << << < HEAD
+#    runner.model.module.freeze_encoder()
+#     runner.model.module.freeze_feature_extractor()
+#     if runner.model.module.decode_head.initialize_at_w_map:
+#         runner.model.module.decode_head.update_z0_params()
+# == == == =
+#    if freeze_features:
+#         model.module.freeze_feature_extractor()
+#     if freeze_encoder:
+#         model.module.freeze_encoder()
+#     # torch.autograd.set_detect_anomaly(True)
+# >>>>>> > epoch_runner
+#    runner.run(data_loaders, cfg.workflow)
+#     # torch.autograd.set_detect_anomaly(False)

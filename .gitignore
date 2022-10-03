@@ -119,6 +119,8 @@ mmseg/.mim
 # Pytorch
 *.pth
 
+# data
 *.html
 *.npy
 *.csv
+*.png

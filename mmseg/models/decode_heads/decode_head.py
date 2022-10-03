@@ -349,11 +349,12 @@ class BaseDecodeHead(BaseModule, metaclass=ABCMeta):
                         weight=seg_weight,
                         ignore_index=self.ignore_index)
                     if loss_decode.loss_name.startswith("loss_edl"):
-                        # load
+                        # For dist training ensure that all log values are in tensors and loaded in cuda
                         logs = loss_decode.get_logs(seg_logit,
                                                     seg_label,
                                                     self.ignore_index)
                         loss.update(logs)
+                        pass
             else:
                 if self.use_bags:
                     raise NotImplementedError
