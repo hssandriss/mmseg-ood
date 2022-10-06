@@ -163,6 +163,7 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         self.kl_weights = []
         self.epoch_num = 0
         self.total_epochs = 70
+        import ipdb; ipdb.set_trace()
 
     def update_z0_params(self):
         """
@@ -187,7 +188,7 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
             output.append(F.conv2d(input=x, weight=z_[:self.w_numel].reshape(self.w_shape), bias=z_[-self.b_numel:].reshape(self.b_shape)))
         return torch.cat(output, dim=0)
 
-    def conv_seg_forward_x(self, x, z):
+    def conv_seg_forward(self, x, z):
         # outputs bs = x.size(0)s
         assert x.size(0) == z.size(0)
         z_list = torch.split(z, 1, 0)
@@ -316,6 +317,14 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         return seg_logits
 
     def cls_seg(self, feat, z):
+        """Classify each pixel."""
+        if self.dropout is not None:
+            feat = self.dropout(feat)
+            # Here I can add weight normalization
+        output = self.conv_seg_forward(feat, z)
+        return output
+
+    def cls_seg_x(self, feat, z):
         """Classify each pixel."""
         if self.dropout is not None:
             feat = self.dropout(feat)
