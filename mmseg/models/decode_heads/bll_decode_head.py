@@ -163,7 +163,6 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         self.kl_weights = []
         self.epoch_num = 0
         self.total_epochs = 70
-        import ipdb; ipdb.set_trace()
 
     def update_z0_params(self):
         """
@@ -420,7 +419,7 @@ class DensityEstimation(nn.Module):
                 for i in bn_indices:
                     transforms.insert(i, BatchNormFlow(self.dim, requires_grad=True))
             self.flow = nn.ModuleList(transforms)
-        if density_type == 'cflow':
+        elif density_type == 'cflow':
             self.feat_dims = kwargs.pop('feat_dims', 512)
             self.flow_length = kwargs.pop('flow_length', 2)
             self.flow_type = kwargs.pop('flow_type', 'cradial_flow')
@@ -431,12 +430,6 @@ class DensityEstimation(nn.Module):
             # build the flow sequence
             if self.flow_type == 'cradial_flow':
                 transforms = [cRadialFlow(self.feat_dims, self.dim) for _ in range(self.flow_length)]
-            # elif self.flow_type == 'planar_flow':
-            #     transforms = [PlanarFlow(self.dim) for _ in range(self.flow_length)]
-            # elif self.flow_type == 'householder_flow':
-            #     transforms = [HouseholderFlow(self.dim) for _ in range(self.flow_length)]
-            # elif self.flow_type == 'nice_flow':
-            #     transforms = [NiceFlow(self.dim, i // 2, i == (self.flow_length - 1)) for i in range(self.flow_length)]
             else:
                 raise NotImplementedError
             if self.use_bn:
@@ -456,7 +449,6 @@ class DensityEstimation(nn.Module):
             cov_numel = int(self.dim * (self.dim + 1) / 2)
             self.L_diag_elements = nn.Parameter(torch.ones(self.dim), requires_grad=True)
             self.L_udiag_elements = nn.Parameter(torch.ones(cov_numel - self.dim) * 1e-5, requires_grad=True)
-            # import ipdb; ipdb.set_trace()
         elif self.density_type == 'fact_normal':
             # Reparametrization distribution N(0, I)
             self.z0_mean = nn.Parameter(torch.zeros(self.dim), requires_grad=False)
@@ -528,14 +520,15 @@ class DensityEstimation(nn.Module):
         # checkout this closed form:
         # kl = -.5 * torch.sum(1. + self.z0_lvar - self.z0_mean.pow(2) - self.log_var.exp(), dim=1, keepdim=True) - ldjs
         # ln p(z_k)  (not averaged)
+        bs = z0.size(0)
         log_p_zk = log_normal_standard(zk, dim=1)
         # ln q(z_0)  (not averaged)
         log_q_z0 = log_normal_diag(z0, mean=self.z0_mean, log_var=self.z0_lvar, dim=1)
-
         # ldj = N E_q_z0[\sum_k log |det dz_k/dz_k-1| ]
         # N E_q0[ ln q(z_0) - ln p(z_k) ]
         logs = log_q_z0 - log_p_zk
-        kl = logs - ldjs
+        kl = (logs - ldjs)
+        assert kl.numel() == bs
         return kl.mean()
 
     def flow_kl_loss_(self, log_det):
@@ -655,51 +648,6 @@ class BatchNormFlow(nn.Module):
         return x, log_det
 
 
-# class PlanarFlow(nn.Module):
-#     def __init__(self, dim):
-#         """Instantiates one step of planar flow.
-
-#         Reference:
-#         Variational Inference with Normalizing Flows
-#         Danilo Jimenez Rezende, Shakir Mohamed
-#         (https://arxiv.org/abs/1505.05770)
-
-#         Args:
-#             dim: input dimensionality.
-#         """
-#         super(PlanarFlow, self).__init__()
-
-#         self.u = nn.Parameter(torch.randn(1, dim))
-#         self.w = nn.Parameter(torch.randn(1, dim))
-#         self.b = nn.Parameter(torch.randn(1))
-
-#     def forward(self, x):
-#         """Forward pass.
-
-#         Args:
-#             x: input tensor (B x D).
-#         Returns:
-#             transformed x and log-determinant of Jacobian.
-#         """
-#         def m(x):
-#             return F.softplus(x) - 1.
-
-#         def h(x):
-#             return torch.tanh(x)
-
-#         def h_prime(x):
-#             return 1. - h(x)**2
-
-#         inner = (self.w * self.u).sum()
-#         u = self.u + (m(inner) - inner) * self.w / self.w.norm()**2
-#         activation = (self.w * x).sum(dim=1, keepdim=True) + self.b
-#         x = x + u * h(activation)
-
-#         psi = h_prime(activation) * self.w
-#         log_det = torch.log(torch.abs(1. + (u * psi).sum(dim=1, keepdim=True)))
-
-#         return x, log_det
-
 class cBatchNormFlow(nn.Module):
     def __init__(self, dim, eps=1e-5, requires_grad=True):
         """Instantiates one step of householder flow.
@@ -800,7 +748,7 @@ class PlanarFlow(nn.Module):
             self.get_u_hat()
         a = torch.mm(z, self.w.T) + self.b
         psi = (1 - torch.tanh(a) ** 2) * self.w
-        log_det = torch.log(1e-4 + (1 + torch.mm(self.u, psi.T)).abs())
+        log_det = torch.log(1e-15 + (1 + torch.mm(self.u, psi.T)).abs())
 
         return z + self.u * torch.tanh(a), log_det
 

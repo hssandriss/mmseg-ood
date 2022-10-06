@@ -8,8 +8,6 @@ from ..builder import HEADS
 from .decode_head import BaseDecodeHead
 from .bll_decode_head import BllBaseDecodeHead
 
-import time
-
 
 class ASPPModule(nn.ModuleList):
     """Atrous Spatial Pyramid Pooling (ASPP) Module.
@@ -106,7 +104,6 @@ class ASPPHead(BaseDecodeHead):
                 H, W) which is feature map for last layer of decoder head.
         """
         x = self._transform_inputs(inputs)
-        import ipdb; ipdb.set_trace()
         aspp_outs = [
             resize(
                 self.image_pool(x),
@@ -207,36 +204,47 @@ class ASPPBllHead(BllBaseDecodeHead):
         if nsamples == 1 and self.density_type == 'flow':
             z0 = self.density_estimation.z0_mean.data.unsqueeze(0)
             zk, sum_log_jacobians = self.density_estimation.forward_flow(z0)
-            output = self.cls_seg(output, zk)
-            kl = self.density_estimation.flow_kl_loss(z0, zk, sum_log_jacobians)
+            output = self.cls_seg_x(output, zk)
+            # Reverse KLD: https://arxiv.org/abs/1912.02762 page 7 Eq. 17-18
+            kl = - sum_log_jacobians.mean()
+            # kl = self.density_estimation.flow_kl_loss(z0, zk, sum_log_jacobians)
             # kl = self.density_estimation.flow_kl_loss_(sum_log_jacobians)
             return output, kl
         elif nsamples > 1 and self.density_type == 'flow':
             z0 = self.density_estimation.sample_base(nsamples)
             zk, sum_log_jacobians = self.density_estimation.forward_flow(z0)
-            output = self.cls_seg(output, zk)
-            kl = self.density_estimation.flow_kl_loss(z0, zk, sum_log_jacobians)
+            output = self.cls_seg_x(output, zk)
+            # Reverse KLD: https://arxiv.org/abs/1912.02762 page 7 Eq. 17-18
+            kl = - sum_log_jacobians.mean()
+            # kl = self.density_estimation.flow_kl_loss(z0, zk, sum_log_jacobians)
             # kl = self.density_estimation.flow_kl_loss_(sum_log_jacobians)
             return output, kl
         if nsamples == 1 and self.density_type == 'cflow':
             z0 = self.density_estimation.z0_mean.data.unsqueeze(0)
             zk, sum_log_jacobians = self.density_estimation.forward_cflow(z0, low_feats)
             output = self.cls_seg(output, zk)
-            kl = self.density_estimation.flow_kl_loss(z0, zk, sum_log_jacobians)
+            # Reverse KLD: https://arxiv.org/abs/1912.02762 page 7 Eq. 17-18
+            kl = - sum_log_jacobians.mean()
+            # kl = self.density_estimation.flow_kl_loss(z0, zk, sum_log_jacobians)
             # kl = self.density_estimation.flow_kl_loss_(sum_log_jacobians)
             return output, kl
         elif nsamples > 1 and self.density_type == 'cflow':
             z0 = self.density_estimation.sample_base(nsamples)
             zk, sum_log_jacobians = self.density_estimation.forward_cflow(z0, low_feats)
-            output = self.cls_seg(output, zk)
-            kl = self.density_estimation.flow_kl_loss(z0, zk, sum_log_jacobians)
+            if self.training:
+                output = self.cls_seg(output, zk)
+            else:
+                output = self.cls_seg_x(output, zk)
+            # Reverse KLD: https://arxiv.org/abs/1912.02762 page 7 Eq. 17-18
+            kl = - sum_log_jacobians.mean()
+            # kl = self.density_estimation.flow_kl_loss(z0, zk, sum_log_jacobians)
             # kl = self.density_estimation.flow_kl_loss_(sum_log_jacobians)
             return output, kl
         elif nsamples == 1 and self.density_type in ('full_normal', 'fact_normal'):
             L = self.density_estimation._L
             zk = self.density_estimation.mu.data.unsqueeze(0)
             kl = self.density_estimation.normal_kl_loss(L)
-            output = self.cls_seg(output, zk)
+            output = self.cls_seg_x(output, zk)
             return output, kl
         elif nsamples > 1 and self.density_type in ('full_normal', 'fact_normal'):
             L = self.density_estimation._L
@@ -244,7 +252,7 @@ class ASPPBllHead(BllBaseDecodeHead):
             z0 = self.density_estimation.sample_base(nsamples)
             zk = self.density_estimation.forward_normal(z0, L)
             kl = self.density_estimation.normal_kl_loss(L)
-            output = self.cls_seg(output, zk)
+            output = self.cls_seg_x(output, zk)
             return output, kl
         else:
             raise NotImplementedError
