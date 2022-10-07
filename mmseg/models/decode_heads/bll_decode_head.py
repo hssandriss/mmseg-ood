@@ -3,21 +3,21 @@ from abc import ABCMeta, abstractmethod
 
 import torch
 import torch.nn as nn
+import numpy as np
 from mmcv.runner import BaseModule, auto_fp16, force_fp32
-from pyro.nn.dense_nn import DenseNN
 from mmseg.core import build_pixel_sampler
 from mmseg.ops import resize
 from ..builder import build_loss
 from ..losses import accuracy
 import torch.nn.functional as F
 import torch.distributions as tdist
-import numpy as np
-from pyro.distributions.transforms import Sylvester, Radial, ConditionalRadial, Planar, ConditionalPlanar
+from pyro.nn.dense_nn import DenseNN
+from pyro.distributions.transforms import Sylvester, Radial, Planar, Householder, ConditionalPlanar, ConditionalRadial, ConditionalHouseholder, BatchNorm
 from pyro.distributions.torch_transform import TransformModule
 from pyro.distributions.conditional import ConditionalTransformModule
 import math
 
-"test w/: python tools/train.py configs/deeplabv3/deeplabv3_r50-d8_720x720_70e_cityscapes_nf_bll.py --experiment-tag 'TEST'"
+# TODO: Apply a DenseLayer to increase dimensionality of the latent dist work on 512,
 
 
 class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
@@ -86,7 +86,10 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
                  use_bn_flow=False,
                  vi_nsamples_train=10,
                  vi_nsamples_test=1,
-                 initialize_at_w_map=True):
+                 vi_use_lower_dim=False,
+                 vi_latent_dim=512,
+                 initialize_at_w_map=True,
+                 ):
         super(BllBaseDecodeHead, self).__init__(init_cfg)
         self._init_inputs(in_channels, in_index, input_transform)
         self.channels = channels
@@ -124,7 +127,15 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
             self.dropout = None
         self.fp16_enabled = False
         # Parameters for building NF
-        self.latent_dim = self.conv_seg.weight.numel() + self.conv_seg.bias.numel()
+        self.conv_seg_params_numel = self.conv_seg.weight.numel() + self.conv_seg.bias.numel()
+        self.vi_use_lower_dim = vi_use_lower_dim
+        if not self.vi_use_lower_dim:
+            self.latent_dim = self.conv_seg_numel
+        else:
+            assert isinstance(vi_latent_dim, int), "When using lower dim in density, you need to specify 'vi_latent_dim'"
+            self.latent_dim = vi_latent_dim
+            self.density_estimation_to_params = nn.Linear(self.latent_dim, self.conv_seg_params_numel)
+
         self.density_type = density_type
         self.flow_type = flow_type
         self.kl_weight = kl_weight
@@ -132,7 +143,7 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         self.vi_nsamples_train = vi_nsamples_train
         self.vi_nsamples_test = vi_nsamples_test
         if self.density_type == 'flow':
-            if self.flow_type in ('householder_flow', 'planar_flow', 'radial_flow', 'nice_flow', 'sylvester_flow'):
+            if self.flow_type in ('householder_flow', 'planar_flow', 'radial_flow', 'sylvester_flow'):
                 self.density_estimation = DensityEstimation(
                     dim=self.latent_dim,
                     density_type=self.density_type,
@@ -142,7 +153,7 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
             else:
                 raise NotImplementedError
         elif self.density_type == 'conditional_flow':
-            if self.flow_type in ('conditional_radial_flow'):
+            if self.flow_type in ('conditional_radial_flow', 'conditional_planar_flow', 'conditional_householder_flow'):
                 self.density_estimation = DensityEstimation(
                     dim=self.latent_dim,
                     density_type=self.density_type,
@@ -184,6 +195,8 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
 
     def conv_seg_forward_x(self, x, z):
         # outputs bs = x.size(0)*z.size(0)
+        if self.vi_use_lower_dim:
+            z = self.density_estimation_to_params(z)
         z_list = torch.split(z, 1, 0)
         output = []
         for z_ in z_list:
@@ -192,7 +205,10 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         return torch.cat(output, dim=0)
 
     def conv_seg_forward(self, x, z):
-        # outputs bs = x.size(0)s
+        # outputs bs = x.size(0)
+        if self.vi_use_lower_dim:
+            z = self.density_estimation_to_params(z)
+            assert
         assert x.size(0) == z.size(0)
         z_list = torch.split(z, 1, 0)
         x_list = torch.split(x, 1, 0)
@@ -410,19 +426,17 @@ class DensityEstimation(nn.Module):
                 transforms = [Planar(input_dim=self.dim) for _ in range(self.flow_length)]
             elif self.flow_type == 'sylvester_flow':
                 transforms = [Sylvester(input_dim=self.dim) for _ in range(self.flow_length)]
-            # elif self.flow_type == 'householder_flow':
-            #     transforms = [HouseholderFlow(self.dim) for _ in range(self.flow_length)]
-            # elif self.flow_type == 'nice_flow':
-            #     transforms = [NiceFlow(self.dim, i // 2, i == (self.flow_length - 1)) for i in range(self.flow_length)]
+            elif self.flow_type == 'householder_flow':
+                transforms = [Householder(input_dim=self.dim) for _ in range(self.flow_length)]
             else:
                 raise NotImplementedError
-            # if self.use_bn:
-            #     bn_indices = []
-            #     for i in range(self.flow_length):
-            #         if i < self.flow_length - 1:
-            #             bn_indices.append(len(bn_indices) + i + 1)
-            #     for i in bn_indices:
-            #         transforms.insert(i, BatchNormFlow(self.dim, requires_grad=True))
+            if self.use_bn:
+                bn_indices = []
+                for i in range(self.flow_length):
+                    if i < self.flow_length - 1:
+                        bn_indices.append(len(bn_indices) + i + 1)
+                for i in bn_indices:
+                    transforms.insert(i, BatchNorm(input_dim=self.dim))
             self.flow = nn.ModuleList(transforms)
             self.base_density = tdist.MultivariateNormal(loc=self.z0_mean, covariance_matrix=self.z0_lvar.exp().diag())
             self.prior_density = tdist.MultivariateNormal(loc=torch.zeros(self.dim), covariance_matrix=torch.ones(self.dim).diag())
@@ -438,15 +452,21 @@ class DensityEstimation(nn.Module):
             if self.flow_type == 'conditional_radial_flow':
                 transforms = [ConditionalRadial(DenseNN(self.feat_dims, [self.feat_dims, self.feat_dims], [self.dim, 1, 1]))
                               for _ in range(self.flow_length)]
+            elif self.flow_type == 'conditional_planar_flow':
+                transforms = [ConditionalPlanar(DenseNN(self.feat_dims, [self.feat_dims, self.feat_dims], [self.dim, 1, 1]))
+                              for _ in range(self.flow_length)]
+            elif self.flow_type == 'conditional_householder_flow':
+                transforms = [ConditionalHouseholder(DenseNN(self.feat_dims, [self.feat_dims, self.feat_dims], [self.dim, 1, 1]))
+                              for _ in range(self.flow_length)]
             else:
                 raise NotImplementedError
-            # if self.use_bn:
-            #     bn_indices = []
-            #     for i in range(self.flow_length):
-            #         if i < self.flow_length - 1:
-            #             bn_indices.append(len(bn_indices) + i + 1)
-            #     for i in bn_indices:
-            #         transforms.insert(i, cBatchNormFlow(self.dim, requires_grad=True))
+            if self.use_bn:
+                bn_indices = []
+                for i in range(self.flow_length):
+                    if i < self.flow_length - 1:
+                        bn_indices.append(len(bn_indices) + i + 1)
+                for i in bn_indices:
+                    transforms.insert(i, BatchNorm(input_dim=self.dim))
             self.flow = nn.ModuleList(transforms)
             self.base_density = tdist.MultivariateNormal(loc=self.z0_mean, covariance_matrix=self.z0_lvar.exp().diag())
             self.prior_density = tdist.MultivariateNormal(loc=torch.zeros(self.dim), covariance_matrix=torch.ones(self.dim).diag())
