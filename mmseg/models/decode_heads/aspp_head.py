@@ -178,6 +178,7 @@ class ASPPBllHead(BllBaseDecodeHead):
                 H, W) which is feature map for last layer of decoder head.
         """
         x = self._transform_inputs(inputs)
+        # import ipdb; ipdb.set_trace()
         low_feats = self.image_pool(x)
         aspp_outs = [
             resize(
@@ -203,7 +204,7 @@ class ASPPBllHead(BllBaseDecodeHead):
         # t1 = time.time()
         if nsamples == 1 and self.density_type == 'flow':
             z0 = self.density_estimation.z0_mean.data.unsqueeze(0)
-            zk, sum_log_jacobians = self.density_estimation.forward_flow(z0)
+            zk, sum_log_jacobians = self.density_estimation.forward_flow(z0, low_feats)
             output = self.cls_seg_x(output, zk)
             # Reverse KLD: https://arxiv.org/abs/1912.02762 page 7 Eq. 17-18
             kl = - sum_log_jacobians.mean()
@@ -212,32 +213,32 @@ class ASPPBllHead(BllBaseDecodeHead):
             return output, kl
         elif nsamples > 1 and self.density_type == 'flow':
             z0 = self.density_estimation.sample_base(nsamples)
-            zk, sum_log_jacobians = self.density_estimation.forward_flow(z0)
+            zk, sum_log_jacobians = self.density_estimation.forward_flow(z0, low_feats)
             output = self.cls_seg_x(output, zk)
             # Reverse KLD: https://arxiv.org/abs/1912.02762 page 7 Eq. 17-18
             # kl = - sum_log_jacobians.mean()
             kl = self.density_estimation.flow_kl_loss(z0, zk, sum_log_jacobians)
             # kl = self.density_estimation.flow_kl_loss_(sum_log_jacobians)
             return output, kl
-        if nsamples == 1 and self.density_type == 'cflow':
+        elif nsamples == 1 and self.density_type == 'conditional_flow':
             z0 = self.density_estimation.z0_mean.data.unsqueeze(0)
-            zk, sum_log_jacobians = self.density_estimation.forward_cflow(z0, low_feats)
+            zk, sum_log_jacobians = self.density_estimation.forward_flow(z0, low_feats)
             output = self.cls_seg(output, zk)
             # Reverse KLD: https://arxiv.org/abs/1912.02762 page 7 Eq. 17-18
-            kl = - sum_log_jacobians.mean()
-            # kl = self.density_estimation.flow_kl_loss(z0, zk, sum_log_jacobians)
+            # kl = - sum_log_jacobians.mean()
+            kl = self.density_estimation.flow_kl_loss(z0, zk, sum_log_jacobians)
             # kl = self.density_estimation.flow_kl_loss_(sum_log_jacobians)
             return output, kl
-        elif nsamples > 1 and self.density_type == 'cflow':
+        elif nsamples > 1 and self.density_type == 'conditional_flow':
             z0 = self.density_estimation.sample_base(nsamples)
-            zk, sum_log_jacobians = self.density_estimation.forward_cflow(z0, low_feats)
+            zk, sum_log_jacobians = self.density_estimation.forward_flow(z0, low_feats)
             if self.training:
                 output = self.cls_seg(output, zk)
             else:
                 output = self.cls_seg_x(output, zk)
             # Reverse KLD: https://arxiv.org/abs/1912.02762 page 7 Eq. 17-18
-            kl = - sum_log_jacobians.mean()
-            # kl = self.density_estimation.flow_kl_loss(z0, zk, sum_log_jacobians)
+            # kl = - sum_log_jacobians.mean()
+            kl = self.density_estimation.flow_kl_loss(z0, zk, sum_log_jacobians)
             # kl = self.density_estimation.flow_kl_loss_(sum_log_jacobians)
             return output, kl
         elif nsamples == 1 and self.density_type in ('full_normal', 'fact_normal'):

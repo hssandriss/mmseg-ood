@@ -244,7 +244,7 @@ def train_segmentor(model,
     else:
         pass
 
-    if is_bll and cfg.model.decode_head.density_type in ("flow", "cflow"):
+    if is_bll and cfg.model.decode_head.density_type in ("flow", "conditional_flow"):
         if runner.model.module.decode_head.initialize_at_w_map:
             runner.model.module.decode_head.update_z0_params()
         runner.model.module.decode_head.density_estimation.tdist_to_device()

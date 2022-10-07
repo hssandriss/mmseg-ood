@@ -4,7 +4,7 @@ from abc import ABCMeta, abstractmethod
 import torch
 import torch.nn as nn
 from mmcv.runner import BaseModule, auto_fp16, force_fp32
-
+from pyro.nn.dense_nn import DenseNN
 from mmseg.core import build_pixel_sampler
 from mmseg.ops import resize
 from ..builder import build_loss
@@ -12,7 +12,9 @@ from ..losses import accuracy
 import torch.nn.functional as F
 import torch.distributions as tdist
 import numpy as np
-import pyro
+from pyro.distributions.transforms import Sylvester, Radial, ConditionalRadial, Planar, ConditionalPlanar
+from pyro.distributions.torch_transform import TransformModule
+from pyro.distributions.conditional import ConditionalTransformModule
 import math
 
 "test w/: python tools/train.py configs/deeplabv3/deeplabv3_r50-d8_720x720_70e_cityscapes_nf_bll.py --experiment-tag 'TEST'"
@@ -130,18 +132,17 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         self.vi_nsamples_train = vi_nsamples_train
         self.vi_nsamples_test = vi_nsamples_test
         if self.density_type == 'flow':
-            if self.flow_type in ('householder_flow', 'planar_flow', 'radial_flow', 'nice_flow'):
+            if self.flow_type in ('householder_flow', 'planar_flow', 'radial_flow', 'nice_flow', 'sylvester_flow'):
                 self.density_estimation = DensityEstimation(
                     dim=self.latent_dim,
                     density_type=self.density_type,
                     flow_length=self.flow_length,
                     flow_type=self.flow_type,
-                    use_bn=self.use_bn_flow,
-                    feat_dims=self.channels)
+                    use_bn=self.use_bn_flow)
             else:
                 raise NotImplementedError
-        elif self.density_type == 'cflow':
-            if self.flow_type in ('cradial_flow'):
+        elif self.density_type == 'conditional_flow':
+            if self.flow_type in ('conditional_radial_flow'):
                 self.density_estimation = DensityEstimation(
                     dim=self.latent_dim,
                     density_type=self.density_type,
@@ -348,7 +349,7 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         else:
             seg_weight = None
 
-        if self.density_estimation.density_type == 'cflow':
+        if self.density_estimation.density_type == 'conditional_flow':
             seg_label = seg_label.squeeze(1)
         else:
             seg_label = seg_label.squeeze(1).repeat(self.vi_nsamples_train, 1, 1)
@@ -364,8 +365,7 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
             if loss_decode.loss_name not in loss:
                 # NLL
                 if self.kl_weight == 'step':
-                    kl_weight = float(torch.min(torch.tensor(1.0, dtype=torch.float32), torch.tensor(
-                        self.epoch_num / self.total_epochs, dtype=torch.float32)))
+                    kl_weight = float(min(1., self.epoch_num / self.total_epochs))
                 else:
                     assert isinstance(self.kl_weight, float), "Invalid KL weights"
                     kl_weight = self.kl_weight
@@ -392,7 +392,7 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
 class DensityEstimation(nn.Module):
     def __init__(self, dim, density_type='flow', **kwargs):
         super(DensityEstimation, self).__init__()
-        if density_type not in ('flow', 'cflow', 'full_normal', 'fact_normal'):
+        if density_type not in ('flow', 'conditional_flow', 'full_normal', 'fact_normal'):
             raise NotImplementedError
         self.dim = dim
         self.density_type = density_type
@@ -405,26 +405,28 @@ class DensityEstimation(nn.Module):
             self.z0_lvar = nn.Parameter(torch.zeros(self.dim), requires_grad=False)
             # build the flow sequence
             if self.flow_type == 'radial_flow':
-                transforms = [RadialFlow(self.dim) for _ in range(self.flow_length)]
+                transforms = [Radial(input_dim=self.dim) for _ in range(self.flow_length)]
             elif self.flow_type == 'planar_flow':
-                transforms = [PlanarFlow(self.dim) for _ in range(self.flow_length)]
-            elif self.flow_type == 'householder_flow':
-                transforms = [HouseholderFlow(self.dim) for _ in range(self.flow_length)]
-            elif self.flow_type == 'nice_flow':
-                transforms = [NiceFlow(self.dim, i // 2, i == (self.flow_length - 1)) for i in range(self.flow_length)]
+                transforms = [Planar(input_dim=self.dim) for _ in range(self.flow_length)]
+            elif self.flow_type == 'sylvester_flow':
+                transforms = [Sylvester(input_dim=self.dim) for _ in range(self.flow_length)]
+            # elif self.flow_type == 'householder_flow':
+            #     transforms = [HouseholderFlow(self.dim) for _ in range(self.flow_length)]
+            # elif self.flow_type == 'nice_flow':
+            #     transforms = [NiceFlow(self.dim, i // 2, i == (self.flow_length - 1)) for i in range(self.flow_length)]
             else:
                 raise NotImplementedError
-            if self.use_bn:
-                bn_indices = []
-                for i in range(self.flow_length):
-                    if i < self.flow_length - 1:
-                        bn_indices.append(len(bn_indices) + i + 1)
-                for i in bn_indices:
-                    transforms.insert(i, BatchNormFlow(self.dim, requires_grad=True))
+            # if self.use_bn:
+            #     bn_indices = []
+            #     for i in range(self.flow_length):
+            #         if i < self.flow_length - 1:
+            #             bn_indices.append(len(bn_indices) + i + 1)
+            #     for i in bn_indices:
+            #         transforms.insert(i, BatchNormFlow(self.dim, requires_grad=True))
             self.flow = nn.ModuleList(transforms)
             self.base_density = tdist.MultivariateNormal(loc=self.z0_mean, covariance_matrix=self.z0_lvar.exp().diag())
             self.prior_density = tdist.MultivariateNormal(loc=torch.zeros(self.dim), covariance_matrix=torch.ones(self.dim).diag())
-        elif density_type == 'cflow':
+        elif density_type == 'conditional_flow':
             self.feat_dims = kwargs.pop('feat_dims', 512)
             self.flow_length = kwargs.pop('flow_length', 2)
             self.flow_type = kwargs.pop('flow_type', 'cradial_flow')
@@ -433,17 +435,18 @@ class DensityEstimation(nn.Module):
             self.z0_mean = nn.Parameter(torch.zeros(self.dim), requires_grad=False)
             self.z0_lvar = nn.Parameter(torch.zeros(self.dim), requires_grad=False)
             # build the flow sequence
-            if self.flow_type == 'cradial_flow':
-                transforms = [cRadialFlow(self.feat_dims, self.dim) for _ in range(self.flow_length)]
+            if self.flow_type == 'conditional_radial_flow':
+                transforms = [ConditionalRadial(DenseNN(self.feat_dims, [self.feat_dims, self.feat_dims], [self.dim, 1, 1]))
+                              for _ in range(self.flow_length)]
             else:
                 raise NotImplementedError
-            if self.use_bn:
-                bn_indices = []
-                for i in range(self.flow_length):
-                    if i < self.flow_length - 1:
-                        bn_indices.append(len(bn_indices) + i + 1)
-                for i in bn_indices:
-                    transforms.insert(i, cBatchNormFlow(self.dim, requires_grad=True))
+            # if self.use_bn:
+            #     bn_indices = []
+            #     for i in range(self.flow_length):
+            #         if i < self.flow_length - 1:
+            #             bn_indices.append(len(bn_indices) + i + 1)
+            #     for i in bn_indices:
+            #         transforms.insert(i, cBatchNormFlow(self.dim, requires_grad=True))
             self.flow = nn.ModuleList(transforms)
             self.base_density = tdist.MultivariateNormal(loc=self.z0_mean, covariance_matrix=self.z0_lvar.exp().diag())
             self.prior_density = tdist.MultivariateNormal(loc=torch.zeros(self.dim), covariance_matrix=torch.ones(self.dim).diag())
@@ -494,36 +497,52 @@ class DensityEstimation(nn.Module):
             z = self.mu + z @ L
         return z
 
-    def forward_flow(self, x):
-        """Forward pass.
+    # def forward_flow(self, x):
+    #     """Forward pass.
+
+    #     Args:
+    #         x: input tensor (B x D).
+    #     Returns:
+    #         transformed x and log-determinant of Jacobian.
+    #     """
+    #     device = next(self.parameters()).device
+    #     [B, _] = list(x.size())
+    #     log_det = torch.zeros(B).to(device)
+    #     for i in range(len(self.flow)):
+    #         if isinstance(self.flow[i], TransformModule):
+    #             x_next = self.flow[i](x)
+    #             inc = self.flow[i].log_abs_det_jacobian(x, x_next)
+    #             x = x_next
+    #         else:
+    #             x, inc = self.flow[i](x)
+    #         log_det = log_det + inc.squeeze()
+    #     return x, log_det
+
+    def forward_flow(self, x, feats):
+        """
+        Forward pass.
 
         Args:
             x: input tensor (B x D).
+            feats: feature tensor (B x M).
         Returns:
             transformed x and log-determinant of Jacobian.
         """
         device = next(self.parameters()).device
         [B, _] = list(x.size())
-        log_det = torch.zeros(B, 1).to(device)
+        log_det = torch.zeros(B).to(device)
         for i in range(len(self.flow)):
-            x, inc = self.flow[i](x)
-            log_det = log_det + inc
-        return x, log_det
-
-    def forward_cflow(self, x, feats):
-        """Forward pass.
-
-        Args:
-            x: input tensor (B x D).
-        Returns:
-            transformed x and log-determinant of Jacobian.
-        """
-        device = next(self.parameters()).device
-        [B, _] = list(x.size())
-        log_det = torch.zeros(B, 1).to(device)
-        for i in range(len(self.flow)):
-            x, feats, inc = self.flow[i](x, feats)
-            log_det = log_det + inc
+            if isinstance(self.flow[i], ConditionalTransformModule):
+                x_next = self.flow[i].condition(feats)(x)
+                inc = self.flow[i].condition(feats).log_abs_det_jacobian(x, x_next)
+                x = x_next
+            elif isinstance(self.flow[i], TransformModule):
+                x_next = self.flow[i](x)
+                inc = self.flow[i].log_abs_det_jacobian(x, x_next)
+                x = x_next
+            else:
+                x, feats, inc = self.flow[i](x, feats)
+            log_det = log_det + inc.squeeze()
         return x, log_det
 
     def sample_base(self, n):
@@ -545,7 +564,7 @@ class DensityEstimation(nn.Module):
         # log_p_zk = log_normal_standard(zk, dim=1)
         # log_q_z0 = log_normal_diag(z0, mean=self.z0_mean, log_var=self.z0_lvar, dim=1)
         # kl = log_q_z0 - ldjs - log_p_zk
-        kl = self.base_density.log_prob(z0) - ldjs.squeeze() - self.prior_density.log_prob(zk)
+        kl = self.base_density.log_prob(z0) - ldjs - self.prior_density.log_prob(zk)
         assert kl.numel() == bs, "KL term has a shape problem before averaging"
         return kl.mean()
 
@@ -631,287 +650,391 @@ def log_normal_diag(x, mean, log_var, average=False, reduce=True, dim=None):
         return log_norm
 
 
-class BatchNormFlow(nn.Module):
-    def __init__(self, dim, eps=1e-5, requires_grad=True):
-        """Instantiates one step of householder flow.
+# class BatchNormFlow(nn.Module):
+#     def __init__(self, dim, eps=1e-5, requires_grad=True):
+#         """Instantiates one step of householder flow.
 
-        Args:
-            dim: input dimensionality.
-        """
-        super(BatchNormFlow, self).__init__()
-        self.dim = dim
-        self.lgamma = nn.Parameter(torch.zeros(self.dim), requires_grad=requires_grad)  # log_alpha
-        self.beta = nn.Parameter(torch.zeros(self.dim), requires_grad=requires_grad)  # beta
-        self.eps = eps
+#         Args:
+#             dim: input dimensionality.
+#         """
+#         super(BatchNormFlow, self).__init__()
+#         self.dim = dim
+#         self.lgamma = nn.Parameter(torch.zeros(self.dim), requires_grad=requires_grad)  # log_alpha
+#         self.beta = nn.Parameter(torch.zeros(self.dim), requires_grad=requires_grad)  # beta
+#         self.eps = eps
 
-        self.register_buffer('m', torch.zeros(self.dim))  # running mean
-        self.register_buffer('v', torch.ones(self.dim))  # running variance
+#         self.register_buffer('m', torch.zeros(self.dim))  # running mean
+#         self.register_buffer('v', torch.ones(self.dim))  # running variance
 
-    def forward(self, x):
-        """Forward pass.
+#     def forward(self, x):
+#         """Forward pass.
 
-        Args:
-            x: input tensor (B x D).
-        Returns:
-            transformed x and log-determinant of Jacobian.
-        """
-        if self.training:
-            running_var = x.var(dim=0)
-            running_mean = x.mean(dim=0)
-        else:
-            running_var = self.v
-            running_mean = self.m
-        x = torch.exp(self.lgamma) * (x - running_mean) / torch.sqrt(running_var + self.eps) + self.beta
-        log_det = (self.lgamma - 0.5 * torch.log(running_var + self.eps)).sum(dim=-1, keepdim=True)
-        return x, log_det
-
-
-class cBatchNormFlow(nn.Module):
-    def __init__(self, dim, eps=1e-5, requires_grad=True):
-        """Instantiates one step of householder flow.
-
-        Args:
-            dim: input dimensionality.
-        """
-        super(cBatchNormFlow, self).__init__()
-        self.dim = dim
-        self.lgamma = nn.Parameter(torch.zeros(self.dim), requires_grad=requires_grad)  # log_alpha
-        self.beta = nn.Parameter(torch.zeros(self.dim), requires_grad=requires_grad)  # beta
-        self.eps = eps
-
-        self.register_buffer('m', torch.zeros(self.dim))  # running mean
-        self.register_buffer('v', torch.ones(self.dim))  # running variance
-
-    def forward(self, x, v):
-        """Forward pass.
-
-        Args:
-            x: input tensor (B x D).
-        Returns:
-            transformed x and log-determinant of Jacobian.
-        """
-        if self.training:
-            running_var = x.var(dim=0)
-            running_mean = x.mean(dim=0)
-        else:
-            running_var = self.v
-            running_mean = self.m
-        x = torch.exp(self.lgamma) * (x - running_mean) / torch.sqrt(running_var + self.eps) + self.beta
-        log_det = (self.lgamma - 0.5 * torch.log(running_var + self.eps)).sum(dim=-1, keepdim=True)
-        return x, v, log_det
+#         Args:
+#             x: input tensor (B x D).
+#         Returns:
+#             transformed x and log-determinant of Jacobian.
+#         """
+#         if self.training:
+#             running_var = x.var(dim=0)
+#             running_mean = x.mean(dim=0)
+#         else:
+#             running_var = self.v
+#             running_mean = self.m
+#         x = torch.exp(self.lgamma) * (x - running_mean) / torch.sqrt(running_var + self.eps) + self.beta
+#         log_det = (self.lgamma - 0.5 * torch.log(running_var + self.eps)).sum(dim=-1, keepdim=True)
+#         return x, log_det
 
 
-class cRadialFlow(nn.Module):
-    def __init__(self, fdim, dim):
-        """Instantiates one step of radial flow.
+# class cBatchNormFlow(nn.Module):
+#     def __init__(self, dim, eps=1e-5, requires_grad=True):
+#         """Instantiates one step of householder flow.
 
-        Args:
-            dim: input dimensionality.
-        """
-        super(cRadialFlow, self).__init__()
+#         Args:
+#             dim: input dimensionality.
+#         """
+#         super(cBatchNormFlow, self).__init__()
+#         self.dim = dim
+#         self.lgamma = nn.Parameter(torch.zeros(self.dim), requires_grad=requires_grad)  # log_alpha
+#         self.beta = nn.Parameter(torch.zeros(self.dim), requires_grad=requires_grad)  # beta
+#         self.eps = eps
 
-        self.d = dim
-        self.linear_a = nn.Linear(fdim, 1)
-        self.linear_b = nn.Linear(fdim, 1)
-        self.linear_c = nn.Linear(fdim, dim)
-        # Transformation for the next block
-        self.feature_transform = nn.Sequential(
-            nn.Linear(fdim, fdim),
-            nn.Sigmoid(),
-            nn.Dropout(0.2)
-        )
+#         self.register_buffer('m', torch.zeros(self.dim))  # running mean
+#         self.register_buffer('v', torch.ones(self.dim))  # running variance
 
-    def forward(self, x, v):
-        """Forward pass.
+#     def forward(self, x, v):
+#         """Forward pass.
 
-        Args:
-            x: input tensor (B x D).
-            v: output from last layer of encoder (B x D).
-        Returns:
-            transformed x and log-determinant of Jacobian.
-        """
-        a, b, c = self.linear_a(v), self.linear_b(v), self.linear_c(v)
-
-        def m(x):
-            return F.softplus(x)
-
-        def h(r):
-            return 1. / (a + r)
-
-        def h_prime(r):
-            return -h(r)**2
-
-        a = torch.exp(a)
-        b = -a + m(b)
-        r = (x - c).norm(dim=1, keepdim=True)
-        tmp = b * h(r)
-        x = x + tmp * (x - c)
-        log_det = (self.d - 1) * torch.log(1. + tmp) + torch.log(1. + tmp + b * h_prime(r) * r)
-        return x, self.feature_transform(v), log_det
+#         Args:
+#             x: input tensor (B x D).
+#         Returns:
+#             transformed x and log-determinant of Jacobian.
+#         """
+#         if self.training:
+#             running_var = x.var(dim=0)
+#             running_mean = x.mean(dim=0)
+#         else:
+#             running_var = self.v
+#             running_mean = self.m
+#         x = torch.exp(self.lgamma) * (x - running_mean) / torch.sqrt(running_var + self.eps) + self.beta
+#         log_det = (self.lgamma - 0.5 * torch.log(running_var + self.eps)).sum(dim=-1, keepdim=True)
+#         return x, v, log_det
 
 
-class PlanarFlow(nn.Module):
-    """Implementation of the invertible transformation used in planar flow:
-        f(z) = z + u * h(dot(w.T, z) + b)
-    See Section 4.1 in https://arxiv.org/pdf/1505.05770.pdf. 
-    """
+# class cRadialFlow(nn.Module):
+#     def __init__(self, fdim, dim):
+#         """Instantiates one step of radial flow.
 
-    def __init__(self, dim: int = 2):
-        """Initialise weights and bias.
+#         Args:
+#             dim: input dimensionality.
+#         """
+#         super(cRadialFlow, self).__init__()
 
-        Args:
-            dim: Dimensionality of the distribution to be estimated.
-        """
-        super().__init__()
-        self.w = nn.Parameter(torch.randn(1, dim).normal_(0, 0.1))
-        self.b = nn.Parameter(torch.randn(1).normal_(0, 0.1))
-        self.u = nn.Parameter(torch.randn(1, dim).normal_(0, 0.1))
+#         self.d = dim
+#         self.linear_a = nn.Linear(fdim, 1)
+#         self.linear_b = nn.Linear(fdim, 1)
+#         self.linear_c = nn.Linear(fdim, dim)
+#         # Transformation for the next block
+#         self.feature_transform = nn.Sequential(
+#             nn.Linear(fdim, fdim),
+#             nn.Sigmoid(),
+#             nn.Dropout(0.2)
+#         )
 
-    def forward(self, z):
-        if torch.mm(self.u, self.w.T) < -1:
-            self.get_u_hat()
-        a = torch.mm(z, self.w.T) + self.b
-        psi = (1 - torch.tanh(a) ** 2) * self.w
-        log_det = torch.log(1e-15 + (1 + torch.mm(self.u, psi.T)).abs())
+#     def forward(self, x, v):
+#         """Forward pass.
 
-        return z + self.u * torch.tanh(a), log_det
+#         Args:
+#             x: input tensor (B x D).
+#             v: output from last layer of encoder (B x D).
+#         Returns:
+#             transformed x and log-determinant of Jacobian.
+#         """
+#         a, b, c = self.linear_a(v), self.linear_b(v), self.linear_c(v)
 
-    def get_u_hat(self) -> None:
-        """Enforce w^T u >= -1. When using h(.) = tanh(.), this is a sufficient condition 
-        for invertibility of the transformation f(z). See Appendix A.1.
-        """
-        wtu = torch.mm(self.u, self.w.T)
-        m_wtu = -1 + torch.log(1 + torch.exp(wtu))
-        self.u.data = (
-            self.u + (m_wtu - wtu) * self.w / torch.norm(self.w, p=2, dim=1) ** 2
-        )
+#         def m(x):
+#             return F.softplus(x)
 
+#         def h(r):
+#             return 1. / (a + r)
 
-class RadialFlow(nn.Module):
-    def __init__(self, dim):
-        """Instantiates one step of radial flow.
+#         def h_prime(r):
+#             return -h(r)**2
 
-        Reference:
-        Variational Inference with Normalizing Flows
-        Danilo Jimenez Rezende, Shakir Mohamed
-        (https://arxiv.org/abs/1505.05770)
-
-        Args:
-            dim: input dimensionality.
-        """
-        super(RadialFlow, self).__init__()
-
-        self.a = nn.Parameter(torch.randn(1))
-        self.b = nn.Parameter(torch.randn(1))
-        self.c = nn.Parameter(torch.randn(1, dim))
-        self.d = dim
-
-    def forward(self, x):
-        """Forward pass.
-
-        Args:
-            x: input tensor (B x D).
-        Returns:
-            transformed x and log-determinant of Jacobian.
-        """
-        def m(x):
-            return F.softplus(x)
-
-        def h(r):
-            return 1. / (a + r)
-
-        def h_prime(r):
-            return -h(r)**2
-
-        a = torch.exp(self.a)
-        b = -a + m(self.b)
-        r = (x - self.c).norm(dim=1, keepdim=True)
-        tmp = b * h(r)
-        x = x + tmp * (x - self.c)
-        log_det = (self.d - 1) * torch.log(1. + tmp) + torch.log(1. + tmp + b * h_prime(r) * r)
-
-        return x, log_det
+#         a = torch.exp(a)
+#         b = -a + m(b)
+#         r = (x - c).norm(dim=1, keepdim=True)
+#         tmp = b * h(r)
+#         x = x + tmp * (x - c)
+#         log_det = (self.d - 1) * torch.log(1. + tmp) + torch.log(1. + tmp + b * h_prime(r) * r)
+#         return x, self.feature_transform(v), log_det
 
 
-class HouseholderFlow(nn.Module):
-    def __init__(self, dim):
-        """Instantiates one step of householder flow.
+# class cPlanarFlow(nn.Module):
+#     def __init__(self, fdim, dim):
+#         """Instantiates one step of planar flow.
 
-        Reference:
-        Improving Variational Auto-Encoders using Householder Flow
-        Jakub M. Tomczak, Max Welling
-        (https://arxiv.org/abs/1611.09630)
+#         Reference:
+#         Variational Inference with Normalizing Flows
+#         Danilo Jimenez Rezende, Shakir Mohamed
+#         (https://arxiv.org/abs/1505.05770)
 
-        Args:
-            dim: input dimensionality.
-        """
-        super(HouseholderFlow, self).__init__()
+#         Args:
+#             fdim: conditined feature dimensionality.
+#             dim: input dimensionality.
+#         """
+#         super(cPlanarFlow, self).__init__()
 
-        self.v = nn.Parameter(torch.randn(1, dim))
-        self.d = dim
+#         self.linear_u = nn.Linear(fdim, dim)
+#         self.linear_w = nn.Linear(fdim, dim)
+#         self.linear_b = nn.Linear(fdim, 1)
+#         # Transformation for the next block
+#         self.feature_transform = nn.Sequential(
+#             nn.Linear(fdim, fdim),
+#             nn.Sigmoid(),
+#             nn.Dropout(0.2)
+#         )
 
-    def forward(self, x):
-        """Forward pass.
+#     def forward(self, x, v):
+#         """Forward pass.
 
-        Args:
-            x: input tensor (B x D).
-        Returns:
-            transformed x and log-determinant of Jacobian.
-        """
-        outer = self.v.t() * self.v
-        v_sqr = self.v.norm()**2
-        H = torch.eye(self.d).cuda() - 2. * outer / v_sqr
-        x = torch.mm(H, x.t()).t()
+#         Args:
+#             v: output from last layer of encoder (B x D).
+#             x: input tensor (B x D).
+#         Returns:
+#             transformed x and log-determinant of Jacobian.
+#         """
+#         u_ = self.linear_u(v)
+#         w_ = self.linear_w(v)
+#         b_ = self.linear_b(v)
 
-        return x, 0
+#         def m(x):
+#             return F.softplus(x) - 1.
+
+#         def h(x):
+#             return torch.tanh(x)
+
+#         def h_prime(x):
+#             return 1. - h(x)**2
+
+#         inner = (w_ * self.u).sum()
+#         u = self.u + (m(inner) - inner) * w_ / w_.norm()**2
+#         activation = (w_ * x).sum(dim=1, keepdim=True) + self.b
+#         x = x + u * h(activation)
+
+#         psi = h_prime(activation) * w_
+#         log_det = torch.log(torch.abs(1. + (u * psi).sum(dim=1, keepdim=True)))
+
+#         return x, self.feature_transform(v), log_det
 
 
-class NiceFlow(nn.Module):
-    def __init__(self, dim, mask, final=False):
-        """Instantiates one step of NICE flow.
+# class PlanarFlow(nn.Module):
+#     def __init__(self, dim):
+#         """Instantiates one step of planar flow.
 
-        Reference:
-        NICE: Non-linear Independent Components Estimation
-        Laurent Dinh, David Krueger, Yoshua Bengio
-        (https://arxiv.org/abs/1410.8516)
+#         Reference:
+#         Variational Inference with Normalizing Flows
+#         Danilo Jimenez Rezende, Shakir Mohamed
+#         (https://arxiv.org/abs/1505.05770)
 
-        Args:
-            dim: input dimensionality.
-            mask: mask that determines active variables.
-            final: True if the final step, False otherwise.
-        """
-        super(NiceFlow, self).__init__()
+#         Args:
+#             dim: input dimensionality.
+#         """
+#         super(PlanarFlow, self).__init__()
 
-        self.final = final
-        if final:
-            self.scale = nn.Parameter(torch.zeros(1, dim))
-        else:
-            self.mask = mask
-            self.coupling = nn.Sequential(
-                nn.Linear(dim // 2, dim * 5), nn.ReLU(),
-                nn.Linear(dim * 5, dim * 5), nn.ReLU(),
-                nn.Linear(dim * 5, dim // 2))
+#         self.u = nn.Parameter(torch.randn(1, dim))
+#         self.w = nn.Parameter(torch.randn(1, dim))
+#         self.b = nn.Parameter(torch.randn(1))
 
-    def forward(self, x):
-        if self.final:
-            x = x * torch.exp(self.scale)
-            log_det = torch.sum(self.scale)
+#     def forward(self, x):
+#         """Forward pass.
 
-            return x, log_det
-        else:
-            [B, W] = list(x.size())
-            x = x.reshape(B, W // 2, 2)
+#         Args:
+#             x: input tensor (B x D).
+#         Returns:
+#             transformed x and log-determinant of Jacobian.
+#         """
+#         def m(x):
+#             return F.softplus(x) - 1.
 
-            if self.mask:
-                on, off = x[:, :, 0], x[:, :, 1]
-            else:
-                off, on = x[:, :, 0], x[:, :, 1]
+#         def h(x):
+#             return torch.tanh(x)
 
-            on = on + self.coupling(off)
+#         def h_prime(x):
+#             return 1. - h(x)**2
 
-            if self.mask:
-                x = torch.stack((on, off), dim=2)
-            else:
-                x = torch.stack((off, on), dim=2)
+#         inner = (self.w * self.u).sum()
+#         u = self.u + (m(inner) - inner) * self.w / self.w.norm()**2
+#         activation = (self.w * x).sum(dim=1, keepdim=True) + self.b
+#         x = x + u * h(activation)
 
-            return x.reshape(B, W), 0
+#         psi = h_prime(activation) * self.w
+#         log_det = torch.log(torch.abs(1. + (u * psi).sum(dim=1, keepdim=True)))
+
+#         return x, log_det
+
+
+# class PlanarFlow(nn.Module):
+#     """Implementation of the invertible transformation used in planar flow:
+#         f(z) = z + u * h(dot(w.T, z) + b)
+#     See Section 4.1 in https://arxiv.org/pdf/1505.05770.pdf.
+#     """
+
+#     def __init__(self, dim: int = 2):
+#         """Initialise weights and bias.
+
+#         Args:
+#             dim: Dimensionality of the distribution to be estimated.
+#         """
+#         super().__init__()
+#         self.w = nn.Parameter(torch.randn(1, dim).normal_(0, 0.1))
+#         self.b = nn.Parameter(torch.randn(1).normal_(0, 0.1))
+#         self.u = nn.Parameter(torch.randn(1, dim).normal_(0, 0.1))
+
+#     def forward(self, z):
+#         if torch.mm(self.u, self.w.T) < -1:
+#             self.get_u_hat()
+#         a = torch.mm(z, self.w.T) + self.b
+#         psi = (1 - torch.tanh(a) ** 2) * self.w
+#         log_det = torch.log(1e-15 + (1 + torch.mm(self.u, psi.T)).abs())
+
+#         return z + self.u * torch.tanh(a), log_det
+
+#     def get_u_hat(self) -> None:
+#         """Enforce w^T u >= -1. When using h(.) = tanh(.), this is a sufficient condition
+#         for invertibility of the transformation f(z). See Appendix A.1.
+#         """
+#         wtu = torch.mm(self.u, self.w.T)
+#         m_wtu = -1 + torch.log(1 + torch.exp(wtu))
+#         self.u.data = (
+#             self.u + (m_wtu - wtu) * self.w / torch.norm(self.w, p=2, dim=1) ** 2
+#         )
+
+
+# class RadialFlow(nn.Module):
+#     def __init__(self, dim):
+#         """Instantiates one step of radial flow.
+
+#         Reference:
+#         Variational Inference with Normalizing Flows
+#         Danilo Jimenez Rezende, Shakir Mohamed
+#         (https://arxiv.org/abs/1505.05770)
+
+#         Args:
+#             dim: input dimensionality.
+#         """
+#         super(RadialFlow, self).__init__()
+
+#         self.a = nn.Parameter(torch.randn(1))
+#         self.b = nn.Parameter(torch.randn(1))
+#         self.c = nn.Parameter(torch.randn(1, dim))
+#         self.d = dim
+
+#     def forward(self, x):
+#         """Forward pass.
+
+#         Args:
+#             x: input tensor (B x D).
+#         Returns:
+#             transformed x and log-determinant of Jacobian.
+#         """
+#         def m(x):
+#             return F.softplus(x)
+
+#         def h(r):
+#             return 1. / (a + r)
+
+#         def h_prime(r):
+#             return -h(r)**2
+
+#         a = torch.exp(self.a)
+#         b = -a + m(self.b)
+#         r = (x - self.c).norm(dim=1, keepdim=True)
+#         tmp = b * h(r)
+#         x = x + tmp * (x - self.c)
+#         log_det = (self.d - 1) * torch.log(1. + tmp) + torch.log(1. + tmp + b * h_prime(r) * r)
+
+#         return x, log_det
+
+
+# class HouseholderFlow(nn.Module):
+#     def __init__(self, dim):
+#         """Instantiates one step of householder flow.
+
+#         Reference:
+#         Improving Variational Auto-Encoders using Householder Flow
+#         Jakub M. Tomczak, Max Welling
+#         (https://arxiv.org/abs/1611.09630)
+
+#         Args:
+#             dim: input dimensionality.
+#         """
+#         super(HouseholderFlow, self).__init__()
+
+#         self.v = nn.Parameter(torch.randn(1, dim))
+#         self.d = dim
+
+#     def forward(self, x):
+#         """Forward pass.
+
+#         Args:
+#             x: input tensor (B x D).
+#         Returns:
+#             transformed x and log-determinant of Jacobian.
+#         """
+#         outer = self.v.t() * self.v
+#         v_sqr = self.v.norm()**2
+#         H = torch.eye(self.d).cuda() - 2. * outer / v_sqr
+#         x = torch.mm(H, x.t()).t()
+
+#         return x, 0
+
+
+# class NiceFlow(nn.Module):
+#     def __init__(self, dim, mask, final=False):
+#         """Instantiates one step of NICE flow.
+
+#         Reference:
+#         NICE: Non-linear Independent Components Estimation
+#         Laurent Dinh, David Krueger, Yoshua Bengio
+#         (https://arxiv.org/abs/1410.8516)
+
+#         Args:
+#             dim: input dimensionality.
+#             mask: mask that determines active variables.
+#             final: True if the final step, False otherwise.
+#         """
+#         super(NiceFlow, self).__init__()
+
+#         self.final = final
+#         if final:
+#             self.scale = nn.Parameter(torch.zeros(1, dim))
+#         else:
+#             self.mask = mask
+#             self.coupling = nn.Sequential(
+#                 nn.Linear(dim // 2, dim * 5), nn.ReLU(),
+#                 nn.Linear(dim * 5, dim * 5), nn.ReLU(),
+#                 nn.Linear(dim * 5, dim // 2))
+
+#     def forward(self, x):
+#         if self.final:
+#             x = x * torch.exp(self.scale)
+#             log_det = torch.sum(self.scale)
+
+#             return x, log_det
+#         else:
+#             [B, W] = list(x.size())
+#             x = x.reshape(B, W // 2, 2)
+
+#             if self.mask:
+#                 on, off = x[:, :, 0], x[:, :, 1]
+#             else:
+#                 off, on = x[:, :, 0], x[:, :, 1]
+
+#             on = on + self.coupling(off)
+
+#             if self.mask:
+#                 x = torch.stack((on, off), dim=2)
+#             else:
+#                 x = torch.stack((off, on), dim=2)
+
+#             return x.reshape(B, W), 0
