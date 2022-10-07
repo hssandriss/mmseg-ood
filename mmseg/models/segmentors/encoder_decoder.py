@@ -331,6 +331,18 @@ class EncoderDecoder(BaseSegmentor):
         print("Filtered:", filtered)
         self.decode_head.frozen_features = True
 
+    def freeze_decoder_except_density_estimation(self):
+        to_eval(self, 'EncoderDecoder')
+        filtered = []
+        for name, param in self.named_parameters():
+            if 'loss_decode' not in name and 'density_estimation' not in name:
+                param.requires_grad = False
+                print(name, "has gradient disabled")
+            else:
+                filtered.append(name)
+        print("Filtered:", filtered)
+        self.decode_head.frozen_features = True
+
 
 def to_eval(module, module_key):
     if 'conv_seg' not in module_key and 'loss_decode' not in module_key:

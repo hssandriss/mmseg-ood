@@ -215,8 +215,8 @@ class ASPPBllHead(BllBaseDecodeHead):
             zk, sum_log_jacobians = self.density_estimation.forward_flow(z0)
             output = self.cls_seg_x(output, zk)
             # Reverse KLD: https://arxiv.org/abs/1912.02762 page 7 Eq. 17-18
-            kl = - sum_log_jacobians.mean()
-            # kl = self.density_estimation.flow_kl_loss(z0, zk, sum_log_jacobians)
+            # kl = - sum_log_jacobians.mean()
+            kl = self.density_estimation.flow_kl_loss(z0, zk, sum_log_jacobians)
             # kl = self.density_estimation.flow_kl_loss_(sum_log_jacobians)
             return output, kl
         if nsamples == 1 and self.density_type == 'cflow':

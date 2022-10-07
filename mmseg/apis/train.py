@@ -221,9 +221,7 @@ def train_segmentor(model,
     elif cfg.load_from and is_bll:
         runner.load_checkpoint(cfg.load_from)
         runner.model.module.freeze_encoder()
-        runner.model.module.freeze_feature_extractor()
-        if runner.model.module.decode_head.initialize_at_w_map:
-            runner.model.module.decode_head.update_z0_params()
+        runner.model.module.freeze_decoder_except_density_estimation()
     elif cfg.load_from and not is_bll:
         runner.load_checkpoint(cfg.load_from)
         if freeze_encoder and init_not_frozen:
@@ -245,5 +243,10 @@ def train_segmentor(model,
         runner.load_checkpoint(cfg.load_from)
     else:
         pass
+
+    if is_bll and cfg.model.decode_head.density_type in ("flow", "cflow"):
+        if runner.model.module.decode_head.initialize_at_w_map:
+            runner.model.module.decode_head.update_z0_params()
+        runner.model.module.decode_head.density_estimation.tdist_to_device()
 
     runner.run(data_loaders, cfg.workflow)

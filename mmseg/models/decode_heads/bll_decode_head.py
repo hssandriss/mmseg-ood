@@ -172,7 +172,10 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         initial_z = torch.cat([self.conv_seg.weight.reshape(-1), self.conv_seg.bias.reshape(-1)]).detach()
         if self.density_estimation.density_type in ('flow', 'cflow'):
             self.density_estimation.z0_mean = nn.Parameter(initial_z.data, requires_grad=False)
-            # self.density_estimation.base_dist = tdist.MultivariateNormal(self.density_estimation.z0_mean, self.density_estimation.z0_cov)
+            self.density_estimation.base_dist = tdist.MultivariateNormal(
+                self.density_estimation.z0_mean,
+                self.density_estimation.z0_lvar.exp().diag())
+
         elif self.density_estimation.density_type in ('full_normal', 'fact_normal'):
             self.density_estimation.mu.data = initial_z.data
         else:
@@ -419,6 +422,8 @@ class DensityEstimation(nn.Module):
                 for i in bn_indices:
                     transforms.insert(i, BatchNormFlow(self.dim, requires_grad=True))
             self.flow = nn.ModuleList(transforms)
+            self.base_density = tdist.MultivariateNormal(loc=self.z0_mean, covariance_matrix=self.z0_lvar.exp().diag())
+            self.prior_density = tdist.MultivariateNormal(loc=torch.zeros(self.dim), covariance_matrix=torch.ones(self.dim).diag())
         elif density_type == 'cflow':
             self.feat_dims = kwargs.pop('feat_dims', 512)
             self.flow_length = kwargs.pop('flow_length', 2)
@@ -440,6 +445,8 @@ class DensityEstimation(nn.Module):
                 for i in bn_indices:
                     transforms.insert(i, cBatchNormFlow(self.dim, requires_grad=True))
             self.flow = nn.ModuleList(transforms)
+            self.base_density = tdist.MultivariateNormal(loc=self.z0_mean, covariance_matrix=self.z0_lvar.exp().diag())
+            self.prior_density = tdist.MultivariateNormal(loc=torch.zeros(self.dim), covariance_matrix=torch.ones(self.dim).diag())
         elif self.density_type == 'full_normal':
             # Reparametrization distribution N(0, I)
             self.z0_mean = nn.Parameter(torch.zeros(self.dim), requires_grad=False)
@@ -459,6 +466,17 @@ class DensityEstimation(nn.Module):
             self.L_diag_elements = nn.Parameter(torch.ones(int(cov_numel)), requires_grad=True)
         else:
             raise NotImplementedError
+
+    def tdist_to_device(self):
+        device = next(self.parameters()).device
+        if hasattr(self, "base_density"):
+            base_mean, base_cov = self.base_density.loc, self.base_density.covariance_matrix
+            base_mean, base_cov = base_mean.to(device), base_cov.to(device)
+            self.base_density = tdist.MultivariateNormal(loc=base_mean, covariance_matrix=base_cov)
+        if hasattr(self, "prior_density"):
+            prior_mean, prior_cov = self.prior_density.loc, self.prior_density.covariance_matrix
+            prior_mean, prior_cov = prior_mean.to(device), prior_cov.to(device)
+            self.prior_density = tdist.MultivariateNormal(loc=prior_mean, covariance_matrix=prior_cov)
 
     def forward_normal(self, z, L):
         """
@@ -520,15 +538,15 @@ class DensityEstimation(nn.Module):
         # checkout this closed form:
         # kl = -.5 * torch.sum(1. + self.z0_lvar - self.z0_mean.pow(2) - self.log_var.exp(), dim=1, keepdim=True) - ldjs
         # ln p(z_k)  (not averaged)
-        bs = z0.size(0)
-        log_p_zk = log_normal_standard(zk, dim=1)
         # ln q(z_0)  (not averaged)
-        log_q_z0 = log_normal_diag(z0, mean=self.z0_mean, log_var=self.z0_lvar, dim=1)
         # ldj = N E_q_z0[\sum_k log |det dz_k/dz_k-1| ]
         # N E_q0[ ln q(z_0) - ln p(z_k) ]
-        logs = log_q_z0 - log_p_zk
-        kl = (logs - ldjs)
-        assert kl.numel() == bs
+        bs = z0.size(0)
+        # log_p_zk = log_normal_standard(zk, dim=1)
+        # log_q_z0 = log_normal_diag(z0, mean=self.z0_mean, log_var=self.z0_lvar, dim=1)
+        # kl = log_q_z0 - ldjs - log_p_zk
+        kl = self.base_density.log_prob(z0) - ldjs.squeeze() - self.prior_density.log_prob(zk)
+        assert kl.numel() == bs, "KL term has a shape problem before averaging"
         return kl.mean()
 
     def flow_kl_loss_(self, log_det):
@@ -692,10 +710,16 @@ class cRadialFlow(nn.Module):
         """
         super(cRadialFlow, self).__init__()
 
+        self.d = dim
         self.linear_a = nn.Linear(fdim, 1)
         self.linear_b = nn.Linear(fdim, 1)
         self.linear_c = nn.Linear(fdim, dim)
-        self.d = dim
+        # Transformation for the next block
+        self.feature_transform = nn.Sequential(
+            nn.Linear(fdim, fdim),
+            nn.Sigmoid(),
+            nn.Dropout(0.2)
+        )
 
     def forward(self, x, v):
         """Forward pass.
@@ -723,7 +747,7 @@ class cRadialFlow(nn.Module):
         tmp = b * h(r)
         x = x + tmp * (x - c)
         log_det = (self.d - 1) * torch.log(1. + tmp) + torch.log(1. + tmp + b * h_prime(r) * r)
-        return x, v, log_det
+        return x, self.feature_transform(v), log_det
 
 
 class PlanarFlow(nn.Module):
