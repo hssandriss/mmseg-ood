@@ -208,7 +208,6 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         # outputs bs = x.size(0)
         if self.vi_use_lower_dim:
             z = self.density_estimation_to_params(z)
-            assert
         assert x.size(0) == z.size(0)
         z_list = torch.split(z, 1, 0)
         x_list = torch.split(x, 1, 0)
