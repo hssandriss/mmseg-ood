@@ -17,8 +17,6 @@ from pyro.distributions.torch_transform import TransformModule
 from pyro.distributions.conditional import ConditionalTransformModule
 import math
 
-# TODO: Apply a DenseLayer to increase dimensionality of the latent dist work on 512,
-
 
 class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
     """Base class for NFBLLBaseDecodeHead.
@@ -87,7 +85,7 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
                  vi_nsamples_train=10,
                  vi_nsamples_test=1,
                  vi_use_lower_dim=False,
-                 vi_latent_dim=512,
+                 vi_latent_dim=1024,
                  initialize_at_w_map=True,
                  ):
         super(BllBaseDecodeHead, self).__init__(init_cfg)
@@ -127,10 +125,10 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
             self.dropout = None
         self.fp16_enabled = False
         # Parameters for building NF
-        self.conv_seg_params_numel = self.conv_seg.weight.numel() + self.conv_seg.bias.numel()
+        self.conv_seg_params_numel = self.conv_seg.weight.numel() + self.conv_seg.bias.numel()  # 9747
         self.vi_use_lower_dim = vi_use_lower_dim
         if not self.vi_use_lower_dim:
-            self.latent_dim = self.conv_seg_numel
+            self.latent_dim = self.conv_seg_params_numel
         else:
             assert isinstance(vi_latent_dim, int), "When using lower dim in density, you need to specify 'vi_latent_dim'"
             self.latent_dim = vi_latent_dim
@@ -170,7 +168,8 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
             raise NotImplementedError
         self.w_shape, self.b_shape = self.conv_seg.weight.shape, self.conv_seg.bias.shape
         self.w_numel, self.b_numel = self.conv_seg.weight.numel(), self.conv_seg.bias.numel()
-        self.initial_p = torch.cat([self.conv_seg.weight.reshape(-1), self.conv_seg.bias.reshape(-1)]).detach()
+
+        # Tracking KL of VI
         self.kl_vals = []
         self.kl_weights = []
         self.epoch_num = 0
@@ -197,6 +196,7 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         # outputs bs = x.size(0)*z.size(0)
         if self.vi_use_lower_dim:
             z = self.density_estimation_to_params(z)
+            assert z.size(-1) == self.conv_seg_params_numel
         z_list = torch.split(z, 1, 0)
         output = []
         for z_ in z_list:
@@ -208,6 +208,7 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         # outputs bs = x.size(0)
         if self.vi_use_lower_dim:
             z = self.density_estimation_to_params(z)
+            assert z.size(-1) == self.conv_seg_params_numel
         assert x.size(0) == z.size(0)
         z_list = torch.split(z, 1, 0)
         x_list = torch.split(x, 1, 0)
@@ -516,27 +517,6 @@ class DensityEstimation(nn.Module):
             z = self.mu + z @ L
         return z
 
-    # def forward_flow(self, x):
-    #     """Forward pass.
-
-    #     Args:
-    #         x: input tensor (B x D).
-    #     Returns:
-    #         transformed x and log-determinant of Jacobian.
-    #     """
-    #     device = next(self.parameters()).device
-    #     [B, _] = list(x.size())
-    #     log_det = torch.zeros(B).to(device)
-    #     for i in range(len(self.flow)):
-    #         if isinstance(self.flow[i], TransformModule):
-    #             x_next = self.flow[i](x)
-    #             inc = self.flow[i].log_abs_det_jacobian(x, x_next)
-    #             x = x_next
-    #         else:
-    #             x, inc = self.flow[i](x)
-    #         log_det = log_det + inc.squeeze()
-    #     return x, log_det
-
     def forward_flow(self, x, feats):
         """
         Forward pass.
@@ -560,7 +540,7 @@ class DensityEstimation(nn.Module):
                 inc = self.flow[i].log_abs_det_jacobian(x, x_next)
                 x = x_next
             else:
-                x, feats, inc = self.flow[i](x, feats)
+                raise NotImplementedError
             log_det = log_det + inc.squeeze()
         return x, log_det
 
@@ -573,22 +553,13 @@ class DensityEstimation(nn.Module):
         return z
 
     def flow_kl_loss(self, z0, zk, ldjs):
-        # checkout this closed form:
-        # kl = -.5 * torch.sum(1. + self.z0_lvar - self.z0_mean.pow(2) - self.log_var.exp(), dim=1, keepdim=True) - ldjs
-        # ln p(z_k)  (not averaged)
-        # ln q(z_0)  (not averaged)
-        # ldj = N E_q_z0[\sum_k log |det dz_k/dz_k-1| ]
-        # N E_q0[ ln q(z_0) - ln p(z_k) ]
         bs = z0.size(0)
-        # log_p_zk = log_normal_standard(zk, dim=1)
-        # log_q_z0 = log_normal_diag(z0, mean=self.z0_mean, log_var=self.z0_lvar, dim=1)
-        # kl = log_q_z0 - ldjs - log_p_zk
         kl = self.base_density.log_prob(z0) - ldjs - self.prior_density.log_prob(zk)
         assert kl.numel() == bs, "KL term has a shape problem before averaging"
         return kl.mean()
 
-    def flow_kl_loss_(self, log_det):
-        """Computes KL loss.
+    def flow_kl_loss_analytical(self, log_det):
+        """Computes KL loss in closed form.
 
         Args:
             mean: mean of the gaussian approximate posterior.

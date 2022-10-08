@@ -11,7 +11,7 @@ from mmcv.image import tensor2imgs
 from mmcv.runner import get_dist_info
 import seaborn as sns; sns.set_theme()
 import matplotlib.pyplot as plt
-from sklearn.metrics import confusion_matrix
+from mmcv.parallel import is_module_wrapper
 
 
 def np2tmp(array, temp_file_name=None, tmpdir=None):
@@ -106,10 +106,14 @@ def single_gpu_test(model,
     for batch_indices, data in zip(loader_indices, data_loader):
         with torch.no_grad():
             result, seg_logit = model(return_loss=False, **data)  # returns labels and logits
-        # with open('last_cluster.npy', 'rb') as f:
-        #     clusters = np.load(f).tolist()
+
+        n_samples = seg_logit.size(0)
         seg_logit = seg_logit.detach()
         seg_gt = dataset.get_gt_seg_map_by_idx_and_reduce_zero_label(batch_indices[0])
+
+        torchmodel = model
+        if is_module_wrapper(torchmodel):
+            torchmodel = torchmodel.module
 
         if (show or out_dir):
             # produce 3 images
@@ -130,16 +134,16 @@ def single_gpu_test(model,
                     out_file = osp.join(out_dir, img_meta['ori_filename'])
                 else:
                     out_file = None
-                # Todo implement bg mask and set it to transparent color
                 for idx, res in enumerate(result):
-                    model.module.show_result(
+                    # FIXME: Hide bg
+                    torchmodel.show_result(
                         img_show,
                         [res],
                         palette=dataset.PALETTE,
                         show=show,
                         out_file=out_file[:-4] + f"_{idx}" + out_file[-4:],
                         opacity=opacity)
-                model.module.show_result(
+                torchmodel.show_result(
                     img_show,
                     [seg_gt, ],
                     palette=dataset.PALETTE,
@@ -148,17 +152,16 @@ def single_gpu_test(model,
                     opacity=opacity)
 
                 # max prob confidence map
-                if not model.module.decode_head.use_bags:
-                    if model.module.decode_head.loss_decode.loss_name.startswith("loss_edl"):
+                if not torchmodel.decode_head.use_bags:
+                    if torchmodel.decode_head.loss_decode.loss_name.startswith("loss_edl"):
                         num_cls = seg_logit.shape[1]
-                        seg_evidence = model.module.decode_head.loss_decode.logit2evidence(seg_logit)
+                        seg_evidence = torchmodel.decode_head.loss_decode.logit2evidence(seg_logit)
                         alpha = seg_evidence + 1
                         probs = alpha / alpha.sum(dim=1, keepdim=True)
                         u = num_cls / alpha.sum(dim=1, keepdim=True)
                         plot_conf(1 - u.cpu().numpy(), out_file[: -4] + "_edl_1_minus_u" + out_file[-4:])
                         plot_conf(probs.max(dim=1)[0].cpu().numpy(), out_file[: -4] + "_edl_conf" + out_file[-4:])
                     else:
-                        # import ipdb; ipdb.set_trace()
                         probs = F.softmax(seg_logit, dim=1)
                         for sample in range(probs.shape[0]):
                             plot_conf(probs[sample, :, :, :].max(dim=0)[0].cpu().numpy(),
@@ -166,7 +169,8 @@ def single_gpu_test(model,
                         plot_conf(probs.mean(dim=0).max(dim=0)[0].cpu().numpy(), out_file[: -4] + f"_sm_mean" + out_file[-4:])
                         plot_conf(probs.var(dim=0).max(dim=0)[0].cpu().numpy(), out_file[: -4] + f"_sm_var" + out_file[-4:])
                         plot_conf(probs.max(dim=1)[0].var(dim=0).cpu().numpy(), out_file[: -4] + f"_sm_var_1" + out_file[-4:])
-
+                else:
+                    raise NotImplementedError
                 # Mask for edges between separate labels
                 # plot_mask(dataset.edge_detector(seg_gt).cpu().numpy(), out_file[: -4] + "_edge_mask" + out_file[-4:])
                 # Mask of ood samples

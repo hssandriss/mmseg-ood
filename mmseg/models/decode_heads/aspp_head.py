@@ -199,7 +199,7 @@ class ASPPBllHead(BllBaseDecodeHead):
         with torch.no_grad():
             output, low_feats = self._forward_feature(inputs)
         # print(output.shape)
-        assert output.is_leaf, "you are backpropagating on feature extractor!"
+        assert output.is_leaf, "you are backpropagating on feature extractor !"
         # torch.cuda.synchronize()
         # t1 = time.time()
         if nsamples == 1 and self.density_type == 'flow':
@@ -209,7 +209,7 @@ class ASPPBllHead(BllBaseDecodeHead):
             # Reverse KLD: https://arxiv.org/abs/1912.02762 page 7 Eq. 17-18
             kl = - sum_log_jacobians.mean()
             # kl = self.density_estimation.flow_kl_loss(z0, zk, sum_log_jacobians)
-            # kl = self.density_estimation.flow_kl_loss_(sum_log_jacobians)
+            # kl = self.density_estimation.flow_kl_loss_analytical(sum_log_jacobians)
             return output, kl
         elif nsamples > 1 and self.density_type == 'flow':
             z0 = self.density_estimation.sample_base(nsamples)
@@ -218,7 +218,7 @@ class ASPPBllHead(BllBaseDecodeHead):
             # Reverse KLD: https://arxiv.org/abs/1912.02762 page 7 Eq. 17-18
             # kl = - sum_log_jacobians.mean()
             kl = self.density_estimation.flow_kl_loss(z0, zk, sum_log_jacobians)
-            # kl = self.density_estimation.flow_kl_loss_(sum_log_jacobians)
+            # kl = self.density_estimation.flow_kl_loss_analytical(sum_log_jacobians)
             return output, kl
         elif nsamples == 1 and self.density_type == 'conditional_flow':
             z0 = self.density_estimation.z0_mean.data.unsqueeze(0)
@@ -227,7 +227,7 @@ class ASPPBllHead(BllBaseDecodeHead):
             # Reverse KLD: https://arxiv.org/abs/1912.02762 page 7 Eq. 17-18
             # kl = - sum_log_jacobians.mean()
             kl = self.density_estimation.flow_kl_loss(z0, zk, sum_log_jacobians)
-            # kl = self.density_estimation.flow_kl_loss_(sum_log_jacobians)
+            # kl = self.density_estimation.flow_kl_loss_analytical(sum_log_jacobians)
             return output, kl
         elif nsamples > 1 and self.density_type == 'conditional_flow':
             z0 = self.density_estimation.sample_base(nsamples)
@@ -239,7 +239,8 @@ class ASPPBllHead(BllBaseDecodeHead):
             # Reverse KLD: https://arxiv.org/abs/1912.02762 page 7 Eq. 17-18
             # kl = - sum_log_jacobians.mean()
             kl = self.density_estimation.flow_kl_loss(z0, zk, sum_log_jacobians)
-            # kl = self.density_estimation.flow_kl_loss_(sum_log_jacobians)
+            # kl = self.density_estimation.flow_kl_loss_analytical(sum_log_jacobians)
+
             return output, kl
         elif nsamples == 1 and self.density_type in ('full_normal', 'fact_normal'):
             L = self.density_estimation._L
