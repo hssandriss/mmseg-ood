@@ -9,11 +9,11 @@ np.seterr(invalid='ignore')
 
 
 # Calculate dissonance of a vector of alphas
-def diss(alpha):
-    evi = alpha - 1
-    s = torch.sum(alpha, axis=1, keepdims=True)
-    bel = evi / s
-    cls = np.arange(alpha.shape[1])
+def diss(bel):
+    # evi = alpha - 1
+    # s = torch.sum(alpha, axis=1, keepdims=True)
+    # bel = evi / s
+    cls = np.arange(bel.shape[1])
     diss = 0
     def Bal(bi, bj): return 1 - torch.abs(bi - bj) / (bi + bj + 1e-8)
     for i in cls:

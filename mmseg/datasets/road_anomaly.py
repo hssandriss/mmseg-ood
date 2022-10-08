@@ -52,7 +52,6 @@ class RoadAnomalyDataset(CustomDataset):
         assert conf_type in ("max_prob", "max_logit", "entropy", "vacuity", "dissonance")
         confs = deepcopy(pred_confs)
         # Mask ignored index
-
         mask = (seg_gt != self.ignore_index)
 
         seg_gt = seg_gt[mask]

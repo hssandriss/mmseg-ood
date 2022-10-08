@@ -9,6 +9,7 @@ from mmseg.core import build_pixel_sampler
 from mmseg.ops import resize
 from ..builder import build_loss
 from ..losses import accuracy
+from ..losses import EDLLoss
 import torch.nn.functional as F
 import torch.distributions as tdist
 from pyro.nn.dense_nn import DenseNN
@@ -16,6 +17,7 @@ from pyro.distributions.transforms import Sylvester, Radial, Planar, Householder
 from pyro.distributions.torch_transform import TransformModule
 from pyro.distributions.conditional import ConditionalTransformModule
 import math
+import itertools
 
 
 class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
@@ -174,6 +176,9 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         self.kl_weights = []
         self.epoch_num = 0
         self.total_epochs = 70
+        if isinstance(self.loss_decode, EDLLoss):
+            # For computing combinaisons
+            self.combinations = list(itertools.combinations_with_replacement(range(self.num_classes), r=self.vi_nsamples_test))
 
     def update_z0_params(self):
         """

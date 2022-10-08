@@ -14,6 +14,59 @@ import matplotlib.pyplot as plt
 from mmcv.parallel import is_module_wrapper
 
 
+def avgfusion(alpha):
+    comb_alpha = alpha.mean(0, keepdim=True)
+    ev = comb_alpha - 1
+    s = comb_alpha.sum(1, keepdim=True)
+    u = alpha.size(1) / s
+    probs = comb_alpha / s
+    bel = ev / s
+    return bel, u, probs
+
+
+def ccfusion(alpha, combinations):
+    EPS = 1e-9
+    s = alpha.sum(1, keepdim=True)
+    ev = alpha - 1
+    bel = ev / s
+    W = ev.size(1)
+    u = W / s
+    a = 1 / (ev.size(1) - (ev.size(0) - 1))
+
+    bel_cons_x = bel.min(dim=0, keepdim=True)[0]
+    bel_cons = bel_cons_x.sum(1, keepdim=True)
+    bel_res_x = bel - bel_cons_x
+
+    u_pre = u.prod(0, keepdim=True)
+    bel_comp_x = (bel_res_x * u_pre / (u + EPS)).sum(0, keepdim=True)  # first part of sum [1, 19, 720, 1280]
+    u_comp = torch.zeros_like(u_pre)  # Comp on X (the whole interval)
+
+    for comb in combinations:
+        if len(set(comb)) == 1:
+            # Intersection at x
+            bel_comp_x[0, comb[0], :, :] += a**ev.size(0) * bel_res_x[range(ev.size(0)), comb, :, :].prod(0)
+            # Union at x and non null intersection
+            bel_comp_x[0, comb[0], :, :] += (1 - a**ev.size(0)) * bel_res_x[range(ev.size(0)), comb, :, :].prod(0)
+        else:
+            # Union at x and null intersection
+            prod = bel_res_x[range(ev.size(0)), comb, :, :].prod(0)
+            if len(set(comb)) == ev.size(1):
+                u_comp[0, 0, :, :] += prod
+            else:
+                for c in set(comb):
+                    bel_comp_x[0, c, :, :] += prod
+
+    bel_comp = bel_comp_x.sum(1, keepdim=True) + u_comp
+    nu = (1 - bel_cons - u_pre) / (bel_comp)
+
+    comb_bel = bel_cons_x + nu * bel_comp_x
+    comb_u = u_pre + nu * u_comp
+    comb_prob = comb_bel + comb_u * (1 / ev.size(1))
+
+    # assert torch.allclose(comb_u + comb_bel.sum(1, keepdim=True), torch.ones_like(comb_u))
+    return comb_bel, comb_u, comb_prob
+
+
 def np2tmp(array, temp_file_name=None, tmpdir=None):
     """Save ndarray to local numpy file.
 
@@ -93,6 +146,26 @@ def single_gpu_test(model,
         'exclusive, only one of them could be true .'
 
     model.eval()
+    torchmodel = model
+    if is_module_wrapper(torchmodel):
+        torchmodel = torchmodel.module
+
+    if hasattr(torchmodel.decode_head, 'density_type') and torchmodel.decode_head.density_type in ("flow", "conditional_flow"):
+        torchmodel.decode_head.density_estimation.tdist_to_device()
+
+    def logit2alpha(x):
+        # for EDL
+        ev = torchmodel.decode_head.loss_decode.logit2evidence(x) + 1
+        if torchmodel.decode_head.loss_decode.pow_alpha:
+            ev = ev**2
+        return ev
+
+    def logit2prob(x):
+        # for CE
+        if torchmodel.decode_head.loss_decode.use_softplus:
+            return F.softplus(x) / F.softplus(x).sum(dim=1, keepdim=True)
+        return F.softmax(x, dim=1)
+
     assert data_loader.batch_size == 1, "TEST SCRIPT ONLY WORKS WITH BATCH SIZE=1"
     results = []
     dataset = data_loader.dataset
@@ -110,10 +183,6 @@ def single_gpu_test(model,
         n_samples = seg_logit.size(0)
         seg_logit = seg_logit.detach()
         seg_gt = dataset.get_gt_seg_map_by_idx_and_reduce_zero_label(batch_indices[0])
-
-        torchmodel = model
-        if is_module_wrapper(torchmodel):
-            torchmodel = torchmodel.module
 
         if (show or out_dir):
             # produce 3 images
@@ -134,11 +203,15 @@ def single_gpu_test(model,
                     out_file = osp.join(out_dir, img_meta['ori_filename'])
                 else:
                     out_file = None
+                ignore_mask = (seg_gt == dataset.ignore_index).astype(np.uint8)
                 for idx, res in enumerate(result):
-                    # FIXME: Hide bg
+                    if dataset.reduce_zero_label:
+                        res_masked_bg = np.ma.array(res, mask=ignore_mask)
+                    else:
+                        res_masked_bg = res
                     torchmodel.show_result(
                         img_show,
-                        [res],
+                        [res_masked_bg],
                         palette=dataset.PALETTE,
                         show=show,
                         out_file=out_file[:-4] + f"_{idx}" + out_file[-4:],
@@ -151,28 +224,52 @@ def single_gpu_test(model,
                     out_file=out_file[:-4] + "_gt" + out_file[-4:],
                     opacity=opacity)
 
-                # max prob confidence map
                 if not torchmodel.decode_head.use_bags:
                     if torchmodel.decode_head.loss_decode.loss_name.startswith("loss_edl"):
+                        # EDL loss
                         num_cls = seg_logit.shape[1]
-                        seg_evidence = torchmodel.decode_head.loss_decode.logit2evidence(seg_logit)
-                        alpha = seg_evidence + 1
-                        probs = alpha / alpha.sum(dim=1, keepdim=True)
-                        u = num_cls / alpha.sum(dim=1, keepdim=True)
-                        plot_conf(1 - u.cpu().numpy(), out_file[: -4] + "_edl_1_minus_u" + out_file[-4:])
-                        plot_conf(probs.max(dim=1)[0].cpu().numpy(), out_file[: -4] + "_edl_conf" + out_file[-4:])
+                        alpha = logit2alpha(seg_logit)
+                        if n_samples > 1:
+                            # Evidence Averaging
+                            alpha_avg = alpha.mean(0, keepdim=True)
+                            probs = alpha_avg / alpha_avg.sum(dim=1, keepdim=True)
+                            u = num_cls / alpha_avg.sum(dim=1, keepdim=True)
+                            plot_conf(1 - u.cpu().numpy(), out_file[: -4] + "_edl_avgfusion_1_u" + out_file[-4:])
+                            plot_conf(probs.max(dim=1)[0].cpu().numpy(), out_file[: -4] + "_edl_avgfusion_conf" + out_file[-4:])
+                            # Evidence CCfusion
+                            bel_ccfusion, u_ccfusion, probs_ccfusion = ccfusion(alpha, torchmodel.decode_head.combinations)
+                            plot_conf(1 - u_ccfusion.cpu().numpy(), out_file[: -4] + "_edl_ccfusion_1_u" + out_file[-4:])
+                            plot_conf(bel_ccfusion.max(dim=1)[0].cpu().numpy(), out_file[: -4] + "_edl_ccfusion_bel" + out_file[-4:])
+                            plot_conf(probs_ccfusion.max(dim=1)[0].cpu().numpy(), out_file[: -4] + "_edl_ccfusion_conf" + out_file[-4:])
+                            # Plotting individual maps
+                            for i in range(n_samples):
+                                alpha_i = alpha[i, :, :, :].unsqueeze(0)
+                                probs_i = alpha_i / alpha_i.sum(dim=1, keepdim=True)
+                                u_i = num_cls / alpha_i.sum(dim=1, keepdim=True)
+                                plot_conf(1 - u_i.cpu().numpy(), out_file[: -4] + f"_edl_1_u_sample_{i}" + out_file[-4:])
+                                plot_conf(probs_i.max(dim=1)[0].cpu().numpy(), out_file[: -4] + f"_edl_conf_sample_{i}" + out_file[-4:])
+                        else:
+                            probs = alpha / alpha.sum(dim=1, keepdim=True)
+                            u = num_cls / alpha.sum(dim=1, keepdim=True)
+                            plot_conf(1 - u.cpu().numpy(), out_file[: -4] + "_edl_u" + out_file[-4:])
+                            plot_conf(probs.max(dim=1)[0].cpu().numpy(), out_file[: -4] + "_edl_conf" + out_file[-4:])
                     else:
-                        probs = F.softmax(seg_logit, dim=1)
-                        for sample in range(probs.shape[0]):
-                            plot_conf(probs[sample, :, :, :].max(dim=0)[0].cpu().numpy(),
-                                      out_file[: -4] + f"_sm_conf_sample_{sample}" + out_file[-4:])
-                        plot_conf(probs.mean(dim=0).max(dim=0)[0].cpu().numpy(), out_file[: -4] + f"_sm_mean" + out_file[-4:])
-                        plot_conf(probs.var(dim=0).max(dim=0)[0].cpu().numpy(), out_file[: -4] + f"_sm_var" + out_file[-4:])
-                        plot_conf(probs.max(dim=1)[0].var(dim=0).cpu().numpy(), out_file[: -4] + f"_sm_var_1" + out_file[-4:])
+                        # Softmax crossentropy loss
+                        probs = logit2prob(seg_logit)
+                        if n_samples > 1:
+                            probs_avg = probs.mean(dim=0)
+                            plot_conf(probs_avg.max(dim=0)[0].cpu().numpy(), out_file[: -4] + f"_sm_avg_prob" + out_file[-4:])
+                            plot_conf(probs.mean(dim=0).max(dim=0)[0].cpu().numpy(), out_file[: -4] + f"_sm_mean" + out_file[-4:])
+                            plot_conf(probs.var(dim=0).max(dim=0)[0].cpu().numpy(), out_file[: -4] + f"_sm_var_max_prob" + out_file[-4:])
+                            plot_conf(probs.max(dim=1)[0].var(dim=0).cpu().numpy(), out_file[: -4] + f"_sm_max_var_prob" + out_file[-4:])
+                            for i in range(n_samples):
+                                plot_conf(probs[i, :, :, :].max(dim=0)[0].cpu().numpy(), out_file[: -4] + f"_sm_conf_sample_{i}" + out_file[-4:])
+                        else:
+                            plot_conf(probs[0, :, :, :].max(dim=0)[0].cpu().numpy(), out_file[: -4] + f"_sm_conf_sample_{i}" + out_file[-4:])
                 else:
                     raise NotImplementedError
                 # Mask for edges between separate labels
-                # plot_mask(dataset.edge_detector(seg_gt).cpu().numpy(), out_file[: -4] + "_edge_mask" + out_file[-4:])
+                plot_mask(dataset.edge_detector(seg_gt).cpu().numpy(), out_file[: -4] + "_edge_mask" + out_file[-4:])
                 # Mask of ood samples
                 if hasattr(dataset, "ood_indices"):
                     plot_mask((seg_gt == dataset.ood_indices[0]).astype(np.uint8), out_file[:-4] + "_ood_mask" + out_file[-4:])
@@ -189,19 +286,26 @@ def single_gpu_test(model,
             # For originally included metrics mIOU
             result_seg = dataset.pre_eval(result, indices=batch_indices)[0]
             # For added metrics OOD, calibration
-            if not model.module.decode_head.use_bags:
-                if model.module.decode_head.loss_decode.loss_name.startswith("loss_edl"):
+            if not torchmodel.decode_head.use_bags:
+                if torchmodel.decode_head.loss_decode.loss_name.startswith("loss_edl"):
                     # For EDL probs
-                    seg_evidence = model.module.decode_head.loss_decode.logit2evidence(seg_logit) + 1
-                    seg_evidence = seg_evidence**2 if model.module.decode_head.loss_decode.pow_alpha else seg_evidence
-                    result_oth = dataset.pre_eval_custom(seg_evidence, seg_gt, "edl")
+                    if n_samples > 1:
+                        def logit_fn(x): return ccfusion(logit2alpha(x), torchmodel.decode_head.combinations)
+                        result_oth = dataset.pre_eval_custom_many_samples(seg_logit, seg_gt, "edl", logit_fn=logit_fn)
+                        # def logit_fn(x): return avgfusion(logit2alpha(x))
+                        # result_oth = dataset.pre_eval_custom_many_samples(seg_logit, seg_gt, "edl", logit_fn=logit_fn)
+
+                    else:
+                        result_oth = dataset.pre_eval_custom_single_sample(seg_logit, seg_gt, "edl", logit_fn=logit2alpha)
                 else:
                     # For softmax probs
-                    result_oth = dataset.pre_eval_custom(seg_logit, seg_gt, "softmax")
+                    if n_samples > 1:
+                        def logit_fn(x): return logit2prob(x).mean(0, keepdim=True)
+                        result_oth = dataset.pre_eval_custom_many_samples(seg_logit, seg_gt, "softmax", logit_fn=logit_fn)
+                    else:
+                        result_oth = dataset.pre_eval_custom_single_sample(seg_logit, seg_gt, "softmax", logit_fn=logit2prob)
             else:
-                result_oth = dataset.pre_eval_custom(seg_evidence, seg_gt, "softmax",
-                                                     model.module.decode_head.use_bags,
-                                                     model.module.decode_head.bags_kwargs)
+                raise NotImplementedError
             result = [(result_seg, result_oth)]
             results.extend(result)
             pass
@@ -264,6 +368,25 @@ def multi_gpu_test(model,
         'exclusive, only one of them could be true .'
 
     model.eval()
+    torchmodel = model
+    if is_module_wrapper(torchmodel):
+        torchmodel = torchmodel.module
+
+    if hasattr(torchmodel.decode_head, 'density_type') and torchmodel.decode_head.density_type in ("flow", "conditional_flow"):
+        torchmodel.decode_head.density_estimation.tdist_to_device()
+
+    def logit2alpha(x):
+        # for EDL
+        ev = torchmodel.decode_head.loss_decode.logit2evidence(x) + 1
+        if torchmodel.decode_head.loss_decode.pow_alpha:
+            ev = ev**2
+        return ev
+
+    def logit2prob(x):
+        # for CE
+        if torchmodel.decode_head.loss_decode.use_softplus:
+            return F.softplus(x) / F.softplus(x).sum(dim=1, keepdim=True)
+        return F.softmax(x, dim=1)
     results = []
     dataset = data_loader.dataset
     # The pipeline about how the data_loader retrieval samples from dataset:
@@ -282,20 +405,49 @@ def multi_gpu_test(model,
 
     for batch_indices, data in zip(loader_indices, data_loader):
         with torch.no_grad():
-            result = model(return_loss=False, rescale=True, **data)
+            result, seg_logit = model(return_loss=False, rescale=True, **data)
+
+        n_samples = seg_logit.size(0)
+        seg_logit = seg_logit.detach()
+        seg_gt = dataset.get_gt_seg_map_by_idx_and_reduce_zero_label(batch_indices[0])
 
         if efficient_test:
             result = [np2tmp(_, tmpdir='.efficient_test') for _ in result]
 
         if format_only:
-            result = dataset.format_results(
-                result, indices=batch_indices, **format_args)
+            result = dataset.format_results(result, indices=batch_indices, **format_args)
         if pre_eval:
             # TODO: adapt samples_per_gpu > 1.
             # only samples_per_gpu=1 valid now
-            result = dataset.pre_eval(result, indices=batch_indices)
+            # TODO: adapt samples_per_gpu > 1.
+            # only samples_per_gpu=1 valid now
+            # For originally included metrics mIOU
+            result_seg = dataset.pre_eval(result, indices=batch_indices)[0]
+            # For added metrics OOD, calibration
+            if not torchmodel.decode_head.use_bags:
+                if torchmodel.decode_head.loss_decode.loss_name.startswith("loss_edl"):
+                    # For EDL probs
+                    if n_samples > 1:
+                        def logit_fn(x): return ccfusion(logit2alpha(x), torchmodel.decode_head.combinations)
+                        result_oth = dataset.pre_eval_custom_many_samples(seg_logit, seg_gt, "edl", logit_fn=logit_fn)
+                        # def logit_fn(x): return avgfusion(logit2alpha(x))
+                        # result_oth = dataset.pre_eval_custom_many_samples(seg_logit, seg_gt, "edl", logit_fn=logit_fn)
 
-        results.extend(result)
+                    else:
+                        result_oth = dataset.pre_eval_custom_single_sample(seg_logit, seg_gt, "edl", logit_fn=logit2alpha)
+                else:
+                    # For softmax probs
+                    if n_samples > 1:
+                        def logit_fn(x): return logit2prob(x).mean(0, keepdim=True)
+                        result_oth = dataset.pre_eval_custom_many_samples(seg_logit, seg_gt, "softmax", logit_fn=logit_fn)
+                    else:
+                        result_oth = dataset.pre_eval_custom_single_sample(seg_logit, seg_gt, "softmax", logit_fn=logit2prob)
+            else:
+                raise NotImplementedError
+            result = [(result_seg, result_oth)]
+            results.extend(result)
+        else:
+            results.extend(result)
 
         if rank == 0:
             batch_size = len(result) * world_size

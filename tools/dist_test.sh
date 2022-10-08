@@ -1,6 +1,6 @@
 CONFIG=$1
-CHECKPOINT=$2
-GPUS=$3
+# CHECKPOINT=$2
+GPUS=$2
 NNODES=${NNODES:-1}
 NODE_RANK=${NODE_RANK:-0}
 PORT=${PORT:-29500}
@@ -15,6 +15,6 @@ python -m torch.distributed.launch \
     --master_port=$PORT \
     $(dirname "$0")/test.py \
     $CONFIG \
-    $CHECKPOINT \
+    # $CHECKPOINT \
     --launcher pytorch \
-    ${@:4}
+    ${@:3}
