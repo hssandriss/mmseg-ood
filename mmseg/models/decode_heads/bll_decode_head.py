@@ -134,7 +134,13 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         else:
             assert isinstance(vi_latent_dim, int), "When using lower dim in density, you need to specify 'vi_latent_dim'"
             self.latent_dim = vi_latent_dim
-            self.density_estimation_to_params = nn.Linear(self.latent_dim, self.conv_seg_params_numel)
+            # self.density_estimation_to_params = nn.Sequential(nn.Linear(self.latent_dim, self.conv_seg_params_numel), nn.ReLU())
+
+            self.density_estimation_to_params = nn.Sequential(
+                nn.Linear(self.latent_dim, self.conv_seg_params_numel // 2),
+                nn.ReLU(),
+                nn.Linear(self.conv_seg_params_numel // 2, self.conv_seg_params_numel)
+            )
 
         self.density_type = density_type
         self.flow_type = flow_type
@@ -390,7 +396,8 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
                 else:
                     assert isinstance(self.kl_weight, float), "Invalid KL weights"
                     kl_weight = self.kl_weight
-                loss[loss_decode.loss_name] = loss_decode(seg_logit, seg_label, ignore_index=self.ignore_index) + kl_weight * kl
+                loss[loss_decode.loss_name] = loss_decode(seg_logit, seg_label, ignore_index=self.ignore_index)
+                loss['loss_kld'] = kl_weight * kl
                 self.kl_weights.append(kl_weight)
                 self.kl_vals.append(kl.item())
                 if loss_decode.loss_name.startswith("loss_edl"):

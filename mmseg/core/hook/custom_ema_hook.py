@@ -37,15 +37,18 @@ class CustomEMAHook(Hook):
     def __init__(self,
                  momentum: float = 0.0002,
                  interval: int = 1,
-                 warm_up: int = 100,  # iters
+                 warm_up: int = 100,
+                 warm_up_epochs: int = 0,
                  resume_from: Optional[str] = None):
         assert isinstance(interval, int) and interval > 0
         self.warm_up = warm_up
+        self.warm_up_epochs = warm_up_epochs
         self.interval = interval
-        # assert momentum > 0 and momentum < 1
-        # self.momentum = momentum**interval
-        # self.momentum = momentum
+        assert momentum > 0 and momentum < 1
+        self.momentum = momentum**interval
+        self.momentum = momentum
         self.checkpoint = resume_from
+        self.enabled = False
         # self.schedule = lambda epoch, total_epochs: np.exp(np.log(0.0002) * epoch / (total_epochs - 1))
 
     def before_run(self, runner):
@@ -78,8 +81,9 @@ class CustomEMAHook(Hook):
         # We warm up the momentum considering the instability at beginning
         momentum = min(self.momentum, (1 + curr_step) / (self.warm_up + curr_step))
         # momentum = self.momentum
-        if curr_step % self.interval != 0:
+        if curr_step % self.interval != 0 and runner.epoch > self.warm_up_epochs:
             return
+        self.enabled = True
         for name, parameter in self.model_parameters.items():
             buffer_name = self.param_ema_buffer[name]
             buffer_parameter = self.model_buffers[buffer_name]
@@ -90,15 +94,17 @@ class CustomEMAHook(Hook):
         """
         We load parameter values from ema backup to model before the EvalHook.
         """
-        self._swap_ema_parameters()
+        if self.enabled:
+            self._swap_ema_parameters()
 
     def before_train_epoch(self, runner):
         """
         We recover model's parameter from ema backup after last epoch's EvalHook.
         """
-        self._swap_ema_parameters()
-        self.momentum = exp_schedule(runner.epoch, runner._max_epochs, lo=0.0002, hi=1.)
-        print_log(f"EMA momentum: {self.momentum}")
+        if self.enabled:
+            self._swap_ema_parameters()
+            # self.momentum = exp_schedule(runner.epoch, runner._max_epochs, lo=0.0002, hi=1.)
+            print_log(f"EMA momentum: {self.momentum}")
 
     def _swap_ema_parameters(self):
         """Swap the parameter of model with parameter in ema_buffer."""

@@ -216,6 +216,7 @@ def train_segmentor(model,
         runner.resume(cfg.resume_from)
         runner.model.module.freeze_encoder()
         runner.model.module.freeze_feature_extractor()
+        runner.model.module.freeze_decoder_except_density_estimation()
     elif cfg.resume_from and not is_bll:
         runner.resume(cfg.resume_from)
     elif cfg.load_from and is_bll:
@@ -245,7 +246,7 @@ def train_segmentor(model,
         pass
 
     if is_bll and cfg.model.decode_head.density_type in ("flow", "conditional_flow"):
-        if runner.model.module.decode_head.initialize_at_w_map:
+        if runner.model.module.decode_head.initialize_at_w_map and not cfg.model.decode_head.vi_use_lower_dim:
             runner.model.module.decode_head.update_z0_params()
         runner.model.module.decode_head.density_estimation.tdist_to_device()
 
