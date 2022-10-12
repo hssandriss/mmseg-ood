@@ -183,7 +183,7 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         self.epoch_num = 0
         self.total_epochs = 70
         if isinstance(self.loss_decode, EDLLoss):
-            # For computing combinaisons
+            # For computing combinaisons (used for ccfusion)
             self.combinations = list(itertools.combinations_with_replacement(range(self.num_classes), r=self.vi_nsamples_test))
 
     def update_z0_params(self):

@@ -146,6 +146,8 @@ class BaseDecodeHead(BaseModule, metaclass=ABCMeta):
         else:
             self.dropout = None
         self.fp16_enabled = False
+        # Added for self-distillation baseline
+        self.last_conv_seg_output = []
 
     def extra_repr(self):
         """Extra repr."""
@@ -241,7 +243,9 @@ class BaseDecodeHead(BaseModule, metaclass=ABCMeta):
         Returns:
             dict[str, Tensor]: a dictionary of loss components
         """
-        seg_logits = self(inputs)
+        seg_logits = self.forward(inputs)
+        # Added for self-distillation baseline
+        self.last_conv_seg_output.append(seg_logits)
         losses = self.losses(seg_logits, gt_semantic_seg)
         return losses
 
