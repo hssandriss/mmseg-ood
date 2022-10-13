@@ -18,6 +18,8 @@ from pyro.distributions.torch_transform import TransformModule
 from pyro.distributions.conditional import ConditionalTransformModule
 import math
 import itertools
+import joblib
+import numpy as np
 
 
 class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
@@ -134,13 +136,13 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         else:
             assert isinstance(vi_latent_dim, int), "When using lower dim in density, you need to specify 'vi_latent_dim'"
             self.latent_dim = vi_latent_dim
-            # self.density_estimation_to_params = nn.Sequential(nn.Linear(self.latent_dim, self.conv_seg_params_numel), nn.ReLU())
+            self.density_estimation_to_params = nn.Linear(self.latent_dim, self.conv_seg_params_numel)
 
-            self.density_estimation_to_params = nn.Sequential(
-                nn.Linear(self.latent_dim, self.conv_seg_params_numel // 2),
-                nn.ReLU(),
-                nn.Linear(self.conv_seg_params_numel // 2, self.conv_seg_params_numel)
-            )
+            # self.density_estimation_to_params = nn.Sequential(
+            #     nn.Linear(self.latent_dim, self.conv_seg_params_numel // 2),
+            #     nn.ReLU(),
+            #     nn.Linear(self.conv_seg_params_numel // 2, self.conv_seg_params_numel)
+            # )
 
         self.density_type = density_type
         self.flow_type = flow_type
@@ -208,6 +210,8 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         if self.vi_use_lower_dim:
             z = self.density_estimation_to_params(z)
             assert z.size(-1) == self.conv_seg_params_numel
+            # joblib.dump(z.cpu().numpy(), 'proj_w_4sylv+1xfc.pkl')
+            # import ipdb; ipdb.set_trace()
         z_list = torch.split(z, 1, 0)
         output = []
         for z_ in z_list:
@@ -539,6 +543,8 @@ class DensityEstimation(nn.Module):
         Returns:
             transformed x and log-determinant of Jacobian.
         """
+        # joblib.dump(x.cpu().numpy(), 'base_dist.pkl')
+        # x = torch.as_tensor(joblib.load('base_dist.pkl')).to(feats.device)
         device = next(self.parameters()).device
         [B, _] = list(x.size())
         log_det = torch.zeros(B).to(device)
@@ -554,6 +560,7 @@ class DensityEstimation(nn.Module):
             else:
                 raise NotImplementedError
             log_det = log_det + inc.squeeze()
+        # joblib.dump(x.cpu().numpy(), 'flow_dist_4sylv+1xfc.pkl')
         return x, log_det
 
     def sample_base(self, n):

@@ -130,7 +130,7 @@ def main():
     import warnings; warnings.filterwarnings("ignore")
     args = parse_args()
 
-    print(args.eval)
+    # print(vars(args))
 
     assert args.out or args.eval or args.format_only or args.show \
         or args.show_dir, \
@@ -246,8 +246,8 @@ def main():
         all_checkpoints_iter = [all_checkpoints_iter[index_last]]
     if args.all:
         # clean previous test logs
-        if osp.exists(os.path.join(args.work_dir, "tf_logs_test")):
-            shutil.rmtree(os.path.join(args.work_dir, "tf_logs_test"))
+        # if osp.exists(os.path.join(args.work_dir, "tf_logs_test")):
+        #     shutil.rmtree(os.path.join(args.work_dir, "tf_logs_test"))
         writer = SummaryWriter(log_dir=os.path.join(args.work_dir, "tf_logs_test"))
     ans = []
 

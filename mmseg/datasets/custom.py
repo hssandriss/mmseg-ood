@@ -331,6 +331,14 @@ class CustomDataset(Dataset):
             probs = probs.flatten(2, -1).squeeze(0).permute(1, 0)
             seg_max_prob = probs.max(dim=1)[0]
             seg_emp_entropy = - (probs * probs.log()).sum(1)
+
+            # Both seg_var_sum and seg_inf_gain are disguised under max_logit column
+            # https://arxiv.org/abs/1803.08533
+            seg_probs = F.softmax(seg_logit, dim=1)
+            seg_var_sum = seg_probs.var(dim=0).sum(dim=0).flatten(0, -1)
+            seg_mean_emp_entropy = (-seg_probs * seg_probs.log()).sum(1, keepdim=True).mean(0, keepdim=True).squeeze().flatten(0, -1)
+            seg_inf_gain = seg_emp_entropy - seg_mean_emp_entropy
+
             seg_u = torch.full(size=seg_max_prob.shape, fill_value=NA)
             seg_dir_entropy = torch.full(size=seg_max_prob.shape, fill_value=NA)
             seg_disonnance = torch.full(size=seg_max_prob.shape, fill_value=NA)
@@ -394,7 +402,18 @@ class CustomDataset(Dataset):
                     u_ood = np.array([NA, NA, NA])
                     um_u_ood = np.array([NA, NA, NA])
                     dir_entr_ood = np.array([NA, NA, NA])
-                    logit_ood = np.array([NA, NA, NA])
+
+                    # seg_inf_gain_array = seg_var_sum.cpu().numpy()
+                    # assert_all_finite(seg_inf_gain_array)
+                    # out_scores_inf_gain, in_scores_inf_gain = self.get_in_out_conf(seg_inf_gain_array, seg_gt_array_flat, "entropy")
+                    # auroc_inf_gain, aupr_inf_gain, fpr_inf_gain = self.evaluate_ood(out_scores_inf_gain, in_scores_inf_gain)
+                    # logit_ood = np.array([auroc_inf_gain, aupr_inf_gain, fpr_inf_gain])
+
+                    seg_var_sum_array = seg_var_sum.cpu().numpy()
+                    assert_all_finite(seg_var_sum_array)
+                    out_scores_var_sum, in_scores_var_sum = self.get_in_out_conf(seg_var_sum_array, seg_gt_array_flat, "entropy")
+                    auroc_var_sum, aupr_var_sum, fpr_var_sum = self.evaluate_ood(out_scores_var_sum, in_scores_var_sum)
+                    logit_ood = np.array([auroc_var_sum, aupr_var_sum, fpr_var_sum])
 
                 corr_max_prob_u = np.array([pearson_corrcoef(seg_max_prob, seg_u)])
                 ood_metrics = (np.hstack((probs_ood, logit_ood, emp_entr_ood, u_ood, um_u_ood, dissonance_ood, dir_entr_ood, corr_max_prob_u)), True)
