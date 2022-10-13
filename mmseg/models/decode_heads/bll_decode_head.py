@@ -136,7 +136,8 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         else:
             assert isinstance(vi_latent_dim, int), "When using lower dim in density, you need to specify 'vi_latent_dim'"
             self.latent_dim = vi_latent_dim
-            self.density_estimation_to_params = nn.Linear(self.latent_dim, self.conv_seg_params_numel)
+            # self.density_estimation_to_params = nn.Linear(self.latent_dim, self.conv_seg_params_numel)
+            self.density_estimation_to_params = nn.Linear(self.latent_dim, self.conv_seg_params_numel, bias=False)
 
             # self.density_estimation_to_params = nn.Sequential(
             #     nn.Linear(self.latent_dim, self.conv_seg_params_numel // 2),
