@@ -12,8 +12,8 @@ from ..losses import accuracy
 from ..losses import EDLLoss
 import torch.nn.functional as F
 import torch.distributions as tdist
-from pyro.nn.dense_nn import DenseNN
-from pyro.distributions.transforms import Sylvester, Radial, Planar, Householder, ConditionalPlanar, ConditionalRadial, ConditionalHouseholder, BatchNorm
+from pyro.nn import DenseNN
+from pyro.distributions.transforms import Sylvester, Radial, Planar, Householder, ConditionalPlanar, ConditionalRadial, ConditionalHouseholder, BatchNorm, affine_coupling, neural_autoregressive
 from pyro.distributions.torch_transform import TransformModule
 from pyro.distributions.conditional import ConditionalTransformModule
 import math
@@ -140,9 +140,9 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
             self.density_estimation_to_params = nn.Linear(self.latent_dim, self.conv_seg_params_numel, bias=False)
 
             # self.density_estimation_to_params = nn.Sequential(
-            #     nn.Linear(self.latent_dim, self.conv_seg_params_numel // 2),
-            #     nn.ReLU(),
-            #     nn.Linear(self.conv_seg_params_numel // 2, self.conv_seg_params_numel)
+            #     nn.Linear(self.latent_dim, self.conv_seg_params_numel // 2, bias=False),
+            #     # nn.ReLU(),
+            #     nn.Linear(self.conv_seg_params_numel // 2, self.conv_seg_params_numel, bias=False)
             # )
 
         self.density_type = density_type
@@ -152,7 +152,7 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         self.vi_nsamples_train = vi_nsamples_train
         self.vi_nsamples_test = vi_nsamples_test
         if self.density_type == 'flow':
-            if self.flow_type in ('householder_flow', 'planar_flow', 'radial_flow', 'sylvester_flow'):
+            if self.flow_type in ('householder_flow', 'planar_flow', 'radial_flow', 'sylvester_flow', 'naf_flow'):
                 self.density_estimation = DensityEstimation(
                     dim=self.latent_dim,
                     density_type=self.density_type,
@@ -187,7 +187,8 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         self.total_epochs = 70
         if isinstance(self.loss_decode, EDLLoss):
             # For computing combinaisons (used for ccfusion)
-            self.combinations = list(itertools.combinations_with_replacement(range(self.num_classes), r=self.vi_nsamples_test))
+            self.combinations = []
+            # self.combinations = list(itertools.combinations_with_replacement(range(self.num_classes), r=self.vi_nsamples_test))
 
     def update_z0_params(self):
         """
@@ -211,7 +212,7 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         if self.vi_use_lower_dim:
             z = self.density_estimation_to_params(z)
             assert z.size(-1) == self.conv_seg_params_numel
-            # joblib.dump(z.cpu().numpy(), 'proj_w_4sylv+1xfc.pkl')
+            # joblib.dump(z.cpu().numpy(), 'proj_w_2xnaf_sig+1xfc.pkl')
             # import ipdb; ipdb.set_trace()
         z_list = torch.split(z, 1, 0)
         output = []
@@ -445,6 +446,12 @@ class DensityEstimation(nn.Module):
                 transforms = [Sylvester(input_dim=self.dim) for _ in range(self.flow_length)]
             elif self.flow_type == 'householder_flow':
                 transforms = [Householder(input_dim=self.dim) for _ in range(self.flow_length)]
+            elif self.flow_type == 'naf_flow':
+                # TODO: tryout IAF, DSF.
+                # Affine coupling.
+                # transforms = [affine_coupling(self.dim, hidden_dims=[2 * self.dim]) for _ in range(self.flow_length)]
+                transforms = [neural_autoregressive(input_dim=self.dim) for _ in range(self.flow_length)]
+                pass
             else:
                 raise NotImplementedError
             if self.use_bn:
@@ -556,12 +563,17 @@ class DensityEstimation(nn.Module):
                 x = x_next
             elif isinstance(self.flow[i], TransformModule):
                 x_next = self.flow[i](x)
+                assert torch.isfinite(x_next).all()
                 inc = self.flow[i].log_abs_det_jacobian(x, x_next)
+                assert torch.isfinite(inc).all()
+                if isinstance(self.flow[i], BatchNorm):
+                    # import ipdb; ipdb.set_trace()
+                    inc = inc.sum(-1)
                 x = x_next
             else:
                 raise NotImplementedError
             log_det = log_det + inc.squeeze()
-        # joblib.dump(x.cpu().numpy(), 'flow_dist_4sylv+1xfc.pkl')
+        # joblib.dump(x.cpu().numpy(), 'flow_dist_2xnaf_sig+1xfc.pkl')
         return x, log_det
 
     def sample_base(self, n):
@@ -619,7 +631,7 @@ class DensityEstimation(nn.Module):
             import ipdb; ipdb.set_trace()
         # assert (L.diag() > 0).all(), "The matrix L is not positive definite"
 
-    @property
+    @ property
     def _L(self):
         """
         Reconstructs Lower Triangular Matrix

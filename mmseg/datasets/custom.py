@@ -319,7 +319,7 @@ class CustomDataset(Dataset):
             evidence = bel * strength
 
             alpha = evidence + 1
-            seg_emp_entropy = - (probs * probs.log()).sum(1)
+            seg_emp_entropy = - (probs * probs.clip(1e-6, 1).log()).sum(1)
             # seg_dir_entropy = (torch.lgamma(alpha).sum(1, keepdim=True) - torch.lgamma(strength) -
             #                    (num_cls - strength) * torch.digamma(strength) -
             #                    ((alpha - 1.0) * torch.digamma(alpha)).sum(1, keepdim=True))
@@ -330,15 +330,14 @@ class CustomDataset(Dataset):
             probs = logit_fn(seg_logit)
             probs = probs.flatten(2, -1).squeeze(0).permute(1, 0)
             seg_max_prob = probs.max(dim=1)[0]
-            seg_emp_entropy = - (probs * probs.log()).sum(1)
+            seg_emp_entropy = - (probs * probs.clip(1e-6, 1).log()).sum(1)
 
             # Both seg_var_sum and seg_inf_gain are disguised under max_logit column
             # https://arxiv.org/abs/1803.08533
             seg_probs = F.softmax(seg_logit, dim=1)
             seg_var_sum = seg_probs.var(dim=0).sum(dim=0).flatten(0, -1)
-            seg_mean_emp_entropy = (-seg_probs * seg_probs.log()).sum(1, keepdim=True).mean(0, keepdim=True).squeeze().flatten(0, -1)
+            seg_mean_emp_entropy = (-seg_probs * seg_probs.clip(1e-6, 1).log()).sum(1, keepdim=True).mean(0, keepdim=True).squeeze().flatten(0, -1)
             seg_inf_gain = seg_emp_entropy - seg_mean_emp_entropy
-
             seg_u = torch.full(size=seg_max_prob.shape, fill_value=NA)
             seg_dir_entropy = torch.full(size=seg_max_prob.shape, fill_value=NA)
             seg_disonnance = torch.full(size=seg_max_prob.shape, fill_value=NA)
@@ -361,7 +360,7 @@ class CustomDataset(Dataset):
                 probs_ood = np.array([auroc_prob, aupr_prob, fpr_prob])
 
                 seg_emp_entropy_array = seg_emp_entropy.cpu().numpy()
-                assert_all_finite(seg_max_prob_array)
+                assert_all_finite(seg_emp_entropy_array)
                 out_scores_emp_entr, in_scores_emp_entr = self.get_in_out_conf(seg_emp_entropy_array, seg_gt_array_flat, "entropy")
                 auroc_emp_entr, aupr_emp_entropy, fpr_emp_entropy = self.evaluate_ood(out_scores_emp_entr, in_scores_emp_entr)
                 emp_entr_ood = np.array([auroc_emp_entr, aupr_emp_entropy, fpr_emp_entropy])

@@ -15,12 +15,26 @@ from mmcv.parallel import is_module_wrapper
 
 
 def avgfusion(alpha):
-    comb_alpha = alpha.mean(0, keepdim=True)
-    ev = comb_alpha - 1
+    ev = alpha - 1
+    comb_ev = ev.mean(0, keepdim=True)
+    comb_alpha = comb_ev + 1
     s = comb_alpha.sum(1, keepdim=True)
-    u = alpha.size(1) / s
+    u = comb_alpha.size(1) / s
     probs = comb_alpha / s
-    bel = ev / s
+    bel = comb_ev / s
+    return bel, u, probs
+
+
+def wfusion(alpha):
+    ev = alpha - 1
+    indiv_s = alpha.sum(1, keepdim=True)
+    indiv_u = 1 / indiv_s
+    comb_ev = (ev * (1 - indiv_u)).sum(0, keepdim=True) / (1 - indiv_u).sum(0, keepdim=True)
+    comb_alpha = comb_ev + 1
+    s = comb_alpha.sum(1, keepdim=True)
+    u = comb_alpha.size(1) / s
+    probs = comb_alpha / s
+    bel = comb_ev / s
     return bel, u, probs
 
 
@@ -32,7 +46,6 @@ def ccfusion(alpha, combinations):
     W = ev.size(1)
     u = W / s
     a = 1 / (ev.size(1) - (ev.size(0) - 1))
-
     bel_cons_x = bel.min(dim=0, keepdim=True)[0]
     bel_cons = bel_cons_x.sum(1, keepdim=True)
     bel_res_x = bel - bel_cons_x
@@ -284,15 +297,21 @@ def single_gpu_test(model,
             # TODO: adapt samples_per_gpu > 1.
             # only samples_per_gpu=1 valid now
             # For originally included metrics mIOU
+            if torchmodel.decode_head.loss_decode.loss_name.startswith("loss_edl") and n_samples > 1:
+                _, _, probs_f = avgfusion(logit2alpha(seg_logit))
+                # _, _, probs_f = wfusion(logit2alpha(seg_logit))
+                result = [probs_f.max(1)[1].squeeze().cpu().numpy()]
             result_seg = dataset.pre_eval(result, indices=batch_indices)[0]
             # For added metrics OOD, calibration
             if not torchmodel.decode_head.use_bags:
                 if torchmodel.decode_head.loss_decode.loss_name.startswith("loss_edl"):
                     # For EDL probs
                     if n_samples > 1:
-                        def logit_fn(x): return ccfusion(logit2alpha(x), torchmodel.decode_head.combinations)
+                        # def logit_fn(x): return ccfusion(logit2alpha(x), torchmodel.decode_head.combinations)
+                        # result_oth = dataset.pre_eval_custom_many_samples(seg_logit, seg_gt, "edl", logit_fn=logit_fn)
+                        def logit_fn(x): return avgfusion(logit2alpha(x))
                         result_oth = dataset.pre_eval_custom_many_samples(seg_logit, seg_gt, "edl", logit_fn=logit_fn)
-                        # def logit_fn(x): return avgfusion(logit2alpha(x))
+                        # def logit_fn(x): return wfusion(logit2alpha(x))
                         # result_oth = dataset.pre_eval_custom_many_samples(seg_logit, seg_gt, "edl", logit_fn=logit_fn)
 
                     else:

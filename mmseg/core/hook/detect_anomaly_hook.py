@@ -11,3 +11,6 @@ class DetectAnomalyHook(Hook):
 
     def after_train_epoch(self, runner):
         torch.autograd.set_detect_anomaly(False)
+
+    def before_iter(self, runner):
+        torch.cuda.empty_cache()

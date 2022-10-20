@@ -205,7 +205,7 @@ def train_segmentor(model,
             hook = build_from_cfg(hook_cfg, HOOKS)
             runner.register_hook(hook, priority=priority)
     if is_bll:
-        assert cfg.load_from or cfg.resume_from, "It is required to pre-learned features for BLL"
+        assert cfg.load_from or cfg.resume_from or cfg.auto_resume, "It is required to pre-learned features for BLL"
 
     if cfg.resume_from is None and cfg.get('auto_resume'):
         resume_from = find_latest_checkpoint(cfg.work_dir)
