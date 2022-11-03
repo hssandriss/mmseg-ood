@@ -119,7 +119,7 @@ class SegmenterMaskTransformerHead(BaseDecodeHead):
         for layer in self.layers:
             x = layer(x)
         x = self.decoder_norm(x)
-
+        #  TODO: checkout the possibility of using this for bll and self-distillation
         patches = self.patch_proj(x[:, :-self.num_classes])
         cls_seg_feat = self.classes_proj(x[:, -self.num_classes:])
 

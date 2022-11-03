@@ -6,10 +6,10 @@ from mmcv.utils import print_log
 @HOOKS.register_module()
 class DetectAnomalyHook(Hook):
 
-    def before_train_epoch(self, runner):
+    def before_train_iter(self, runner):
         torch.autograd.set_detect_anomaly(True)
 
-    def after_train_epoch(self, runner):
+    def after_train_iter(self, runner):
         torch.autograd.set_detect_anomaly(False)
 
     def before_iter(self, runner):
