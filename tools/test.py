@@ -386,15 +386,15 @@ def main():
                 if reg_ood_valid:
                     curr_iter_reg_ood_df = pd.DataFrame(
                         data=[[all_checkpoints_iter[i],
-                               round(float(metric_dict["metric"]['max_prob.auroc']), 2),
-                               round(float(metric_dict["metric"]['max_prob.aupr']), 2),
-                               round(float(metric_dict["metric"]['max_prob.fpr95']), 2),
-                               round(float(metric_dict["metric"]['max_logit.auroc']), 2),
-                               round(float(metric_dict["metric"]['max_logit.aupr']), 2),
-                               round(float(metric_dict["metric"]['max_logit.fpr95']), 2),
-                               round(float(metric_dict["metric"]['emp_entropy.auroc']), 2),
-                               round(float(metric_dict["metric"]['emp_entropy.aupr']), 2),
-                               round(float(metric_dict["metric"]['emp_entropy.fpr95']), 2)]],
+                               round(float(metric_dict["metric"]['max_prob.auroc']), 4),
+                               round(float(metric_dict["metric"]['max_prob.aupr']), 4),
+                               round(float(metric_dict["metric"]['max_prob.fpr95']), 4),
+                               round(float(metric_dict["metric"]['max_logit.auroc']), 4),
+                               round(float(metric_dict["metric"]['max_logit.aupr']), 4),
+                               round(float(metric_dict["metric"]['max_logit.fpr95']), 4),
+                               round(float(metric_dict["metric"]['emp_entropy.auroc']), 4),
+                               round(float(metric_dict["metric"]['emp_entropy.aupr']), 4),
+                               round(float(metric_dict["metric"]['emp_entropy.fpr95']), 4)]],
                         columns=["epoch",
                                  'max_prob.auroc',
                                  'max_prob.aupr',
@@ -414,15 +414,15 @@ def main():
                 if sl_ood_valid:
                     curr_iter_sl_ood_df = pd.DataFrame(
                         data=[[all_checkpoints_iter[i],
-                               round(float(metric_dict["metric"]['u.auroc']), 2),
-                               round(float(metric_dict["metric"]['u.aupr']), 2),
-                               round(float(metric_dict["metric"]['u.fpr95']), 2),
-                               round(float(metric_dict["metric"]['disonnance.auroc']), 2),
-                               round(float(metric_dict["metric"]['disonnance.aupr']), 2),
-                               round(float(metric_dict["metric"]['disonnance.fpr95']), 2),
-                               round(float(metric_dict["metric"]['dir_entropy.auroc']), 2),
-                               round(float(metric_dict["metric"]['dir_entropy.aupr']), 2),
-                               round(float(metric_dict["metric"]['dir_entropy.fpr95']), 2)]],
+                               round(float(metric_dict["metric"]['u.auroc']), 4),
+                               round(float(metric_dict["metric"]['u.aupr']), 4),
+                               round(float(metric_dict["metric"]['u.fpr95']), 4),
+                               round(float(metric_dict["metric"]['disonnance.auroc']), 4),
+                               round(float(metric_dict["metric"]['disonnance.aupr']), 4),
+                               round(float(metric_dict["metric"]['disonnance.fpr95']), 4),
+                               round(float(metric_dict["metric"]['dir_entropy.auroc']), 4),
+                               round(float(metric_dict["metric"]['dir_entropy.aupr']), 4),
+                               round(float(metric_dict["metric"]['dir_entropy.fpr95']), 4)]],
                         columns=["epoch",
                                  'u.auroc',
                                  'u.aupr',
@@ -456,14 +456,33 @@ def main():
     # import ipdb; ipdb.set_trace()
     if sl_ood_valid:
         print(
-            f"{reg_ood_summary.loc[i, 'max_prob.auroc']}/{reg_ood_summary.loc[i, 'max_logit.auroc']}/{reg_ood_summary.loc[i, 'emp_entropy.auroc']}/{sl_ood_summary.loc[i, 'u.auroc']}/{sl_ood_summary.loc[i, 'disonnance.auroc']}"
-            f"&{reg_ood_summary.loc[i, 'max_prob.aupr']}/{reg_ood_summary.loc[i, 'max_logit.aupr']}/{reg_ood_summary.loc[i, 'emp_entropy.aupr']}/{sl_ood_summary.loc[i, 'u.aupr']}/{sl_ood_summary.loc[i, 'disonnance.aupr']}"
-            f"&{reg_ood_summary.loc[i, 'max_prob.fpr95']}/{reg_ood_summary.loc[i, 'max_logit.fpr95']}/{reg_ood_summary.loc[i, 'emp_entropy.fpr95']}/{sl_ood_summary.loc[i, 'u.fpr95']}/{sl_ood_summary.loc[i, 'disonnance.fpr95']}")
+            f"{reg_ood_summary.loc[i, 'max_prob.auroc']*100}&{reg_ood_summary.loc[i, 'max_prob.aupr']*100}&{reg_ood_summary.loc[i, 'max_prob.fpr95']*100}")
+        print(
+            f"{reg_ood_summary.loc[i, 'max_logit.auroc']*100}&{reg_ood_summary.loc[i, 'max_logit.aupr']*100}&{reg_ood_summary.loc[i, 'max_logit.fpr95']*100}")
+        print(
+            f"{reg_ood_summary.loc[i, 'emp_entropy.auroc']*100}&{reg_ood_summary.loc[i, 'emp_entropy.aupr']*100}&{reg_ood_summary.loc[i, 'emp_entropy.fpr95']*100}")
+        print(f"{sl_ood_summary.loc[i, 'u.auroc']*100}&{sl_ood_summary.loc[i, 'u.aupr']*100}&{sl_ood_summary.loc[i, 'u.fpr95']*100}")
+        print(
+            f"{sl_ood_summary.loc[i, 'disonnance.auroc']*100}&{sl_ood_summary.loc[i, 'disonnance.aupr']*100}&{sl_ood_summary.loc[i, 'disonnance.fpr95']*100}")
+
+        # print(
+        #     f"{reg_ood_summary.loc[i, 'max_prob.auroc']}/{reg_ood_summary.loc[i, 'max_logit.auroc']}/{reg_ood_summary.loc[i, 'emp_entropy.auroc']}/{sl_ood_summary.loc[i, 'u.auroc']}/{sl_ood_summary.loc[i, 'disonnance.auroc']}"
+        #     f"&{reg_ood_summary.loc[i, 'max_prob.aupr']}/{reg_ood_summary.loc[i, 'max_logit.aupr']}/{reg_ood_summary.loc[i, 'emp_entropy.aupr']}/{sl_ood_summary.loc[i, 'u.aupr']}/{sl_ood_summary.loc[i, 'disonnance.aupr']}"
+        #     f"&{reg_ood_summary.loc[i, 'max_prob.fpr95']}/{reg_ood_summary.loc[i, 'max_logit.fpr95']}/{reg_ood_summary.loc[i, 'emp_entropy.fpr95']}/{sl_ood_summary.loc[i, 'u.fpr95']}/{sl_ood_summary.loc[i, 'disonnance.fpr95']}")
     else:
         print(
-            f"{reg_ood_summary.loc[i, 'max_prob.auroc']}/{reg_ood_summary.loc[i, 'max_logit.auroc']}/{reg_ood_summary.loc[i, 'emp_entropy.auroc']}/-.--/-.--"
-            f"&{reg_ood_summary.loc[i, 'max_prob.aupr']}/{reg_ood_summary.loc[i, 'max_logit.aupr']}/{reg_ood_summary.loc[i, 'emp_entropy.aupr']}/-.--/-.--"
-            f"&{reg_ood_summary.loc[i, 'max_prob.fpr95']}/{reg_ood_summary.loc[i, 'max_logit.fpr95']}/{reg_ood_summary.loc[i, 'emp_entropy.fpr95']}/-.--/-.--")
+            f"{reg_ood_summary.loc[i, 'max_prob.auroc']*100}&{reg_ood_summary.loc[i, 'max_prob.aupr']*100}&{reg_ood_summary.loc[i, 'max_prob.fpr95']*100}")
+        print(
+            f"{reg_ood_summary.loc[i, 'max_logit.auroc']*100}&{reg_ood_summary.loc[i, 'max_logit.aupr']*100}&{reg_ood_summary.loc[i, 'max_logit.fpr95']*100}")
+        print(
+            f"{reg_ood_summary.loc[i, 'emp_entropy.auroc']*100}&{reg_ood_summary.loc[i, 'emp_entropy.aupr']*100}&{reg_ood_summary.loc[i, 'emp_entropy.fpr95']*100}")
+        print(f"-.--&-.--&-.--")
+        print(f"-.--&-.--&-.--")
+        # print(
+        #     f"{reg_ood_summary.loc[i, 'max_prob.auroc']}/{reg_ood_summary.loc[i, 'max_logit.auroc']}/{reg_ood_summary.loc[i, 'emp_entropy.auroc']}/-.--/-.--"
+        #     f"&{reg_ood_summary.loc[i, 'max_prob.aupr']}/{reg_ood_summary.loc[i, 'max_logit.aupr']}/{reg_ood_summary.loc[i, 'emp_entropy.aupr']}/-.--/-.--"
+        #     f"&{reg_ood_summary.loc[i, 'max_prob.fpr95']}/{reg_ood_summary.loc[i, 'max_logit.fpr95']}/{reg_ood_summary.loc[i, 'emp_entropy.fpr95']}/-.--/-.--")
+
     suffixe = re.search(r"(?:[0-9]{14})_(.*)$", args.work_dir).groups()[0]
     with open(os.path.join(args.work_dir, f"test_results_all_{suffixe}.json" if args.all else f"test_results_{suffixe}.json"), "w") as f:
         json.dump(ans, f)

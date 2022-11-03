@@ -159,7 +159,9 @@ def lam(epoch_num, total_epochs, annealing_start, annealing_step, annealing_meth
         annealing_coef = torch.min(torch.tensor(1.0, dtype=torch.float32), torch.tensor(
             epoch_num / (total_epochs / 2), dtype=torch.float32)) * 0.1
     elif annealing_method == 'exp':
-        annealing_coef = annealing_start * torch.exp(-torch.log(annealing_start) / (total_epochs - 1) * epoch_num)
+        annealing_coef = torch.min(
+            annealing_start * torch.exp(-torch.log(annealing_start) / (annealing_step - 1) * epoch_num),
+            torch.tensor(1.0, dtype=torch.float32))
     elif annealing_method == 'zero':
         annealing_coef = torch.tensor(0., dtype=torch.float32)
     elif annealing_method == 'one':
@@ -212,6 +214,7 @@ class EDLLoss(nn.Module):
         # import ipdb; ipdb.set_trace()
         self.lam_schedule = []
         for epoch in range(self.total_epochs):
+            # lam(epoch_num, total_epochs, annealing_start, annealing_step, annealing_method, annealing_from)
             self.lam_schedule.append(lam(epoch, self.total_epochs, self.annealing_start,
                                      self.annealing_step, self.annealing_method, self.annealing_from))
         # if self.annealing_method != 'zero':
@@ -378,13 +381,13 @@ class EDLLoss(nn.Module):
         # import ipdb; ipdb.set_trace()
         gt_cls_ = gt_cls.clone()
         gt_cls_[mask_ignore] = 0
-        cls_ev = evidence.gather(1, gt_cls_)
-        for c in range(self.num_classes):
-            mask_cls = torch.logical_and(gt_cls == c, ~mask_ignore)
-            if mask_cls.any():
-                logs[f"mean_target_cls_{c}_ev"] = cls_ev[mask_cls].mean()
-            else:
-                logs[f"mean_target_cls_{c}_ev"] = torch.tensor(0., device=alpha.device)
+        # cls_ev = evidence.gather(1, gt_cls_)
+        # for c in range(self.num_classes):
+        #     mask_cls = torch.logical_and(gt_cls == c, ~mask_ignore)
+        #     if mask_cls.any():
+        #         logs[f"mean_target_cls_{c}_ev"] = cls_ev[mask_cls].mean()
+        #     else:
+        #         logs[f"mean_target_cls_{c}_ev"] = torch.tensor(0., device=alpha.device)
         logs["mean_max_ev"] = evidence.max(dim=1, keepdim=True)[0].mean()
 
         logs["mean_L0_A"] = self.last_A
@@ -399,9 +402,9 @@ class EDLLoss(nn.Module):
         # logs["avg_diss"] = (diss(alpha) * ~mask_ignore).sum() / ((~mask_ignore).sum() + EPS)
         logs["acc_seg"] = succ.sum() / (fail.sum() + succ.sum()) * 100
 
-        max_prob_flat = max_prob.permute(1, 0, 2, 3).flatten(1, -1).squeeze()
-        u_flat = u.permute(1, 0, 2, 3).flatten(1, -1).squeeze()
-        logs["avg_max_prob_u_corr"] = torchmetrics.functional.pearson_corrcoef(max_prob_flat, u_flat)
+        # max_prob_flat = max_prob.permute(1, 0, 2, 3).flatten(1, -1).squeeze()
+        # u_flat = u.permute(1, 0, 2, 3).flatten(1, -1).squeeze()
+        # logs["avg_max_prob_u_corr"] = torchmetrics.functional.pearson_corrcoef(max_prob_flat, u_flat)
 
         # one_hot_gt = torch.zeros_like(pred, dtype=torch.uint8).scatter_(1, gt_cls_, 1)
         # fake_alphas = alpha * (1 - one_hot_gt) + one_hot_gt
@@ -409,6 +412,7 @@ class EDLLoss(nn.Module):
         # fake_var = torch.sum((fake_alphas * (fake_strength - fake_alphas)
         #                       ) / (fake_strength * fake_strength * (fake_strength + 1)), dim=1, keepdim=True)
         # logs["mean_dir_fake_var"] = torch.where(mask_ignore, torch.zeros_like(fake_var), fake_var).sum() / (~mask_ignore).sum()
+        # import ipdb; ipdb.set_trace()
         return logs
 
     # @ property

@@ -124,7 +124,11 @@ def train_segmentor(model,
     if is_bll:
         optim_type = cfg.optimizer.pop('type')
         assert optim_type == 'SGD', "currently just SGD is supported for BLL models"
+        # optimizer = torch.optim.SGD([{"params": [p for name, p in model.named_parameters() if "density_estimation" in name], **cfg.optimizer},
+        #                             {"params": [p for name, p in model.named_parameters() if "density_estimation" not in name]}], lr=1e-5)
         optimizer = torch.optim.SGD(params=[p for name, p in model.named_parameters() if "density_estimation" in name], **cfg.optimizer)
+        # cfg.optimizer.pop('momentum')
+        # optimizer = torch.optim.Adam(params=[p for name, p in model.named_parameters() if "density_estimation" in name], **cfg.optimizer)
     else:
         optimizer = build_optimizer(model, cfg.optimizer)
 

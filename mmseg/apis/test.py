@@ -28,7 +28,7 @@ def avgfusion(alpha):
 def wfusion(alpha):
     ev = alpha - 1
     indiv_s = alpha.sum(1, keepdim=True)
-    indiv_u = 1 / indiv_s
+    indiv_u = alpha.size(1) / indiv_s
     comb_ev = (ev * (1 - indiv_u)).sum(0, keepdim=True) / (1 - indiv_u).sum(0, keepdim=True)
     comb_alpha = comb_ev + 1
     s = comb_alpha.sum(1, keepdim=True)
@@ -192,6 +192,17 @@ def single_gpu_test(model,
     for batch_indices, data in zip(loader_indices, data_loader):
         with torch.no_grad():
             result, seg_logit = model(return_loss=False, **data)  # returns labels and logits
+
+        # # For testing dropout
+        # result = []
+        # seg_logit = []
+        # for _ in range(20):
+        #     with torch.no_grad():
+        #         torchmodel.decode_head.dropout.train()
+        #         result_i, seg_logit_i = model(return_loss=False, **data)
+        #     result.append(result_i)
+        #     seg_logit.append(seg_logit_i.detach())
+        # seg_logit = torch.cat(seg_logit, dim=0)
 
         n_samples = seg_logit.size(0)
         seg_logit = seg_logit.detach()

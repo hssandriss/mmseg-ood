@@ -13,7 +13,7 @@ from ..losses import EDLLoss
 import torch.nn.functional as F
 import torch.distributions as tdist
 from pyro.nn import DenseNN
-from pyro.distributions.transforms import Sylvester, Radial, Planar, Householder, ConditionalPlanar, ConditionalRadial, ConditionalHouseholder, BatchNorm, affine_coupling, neural_autoregressive
+from pyro.distributions.transforms import Sylvester, Radial, Planar, Householder, ConditionalPlanar, ConditionalRadial, ConditionalHouseholder, BatchNorm, polynomial, neural_autoregressive, block_autoregressive, Permute, BlockAutoregressive
 from pyro.distributions.torch_transform import TransformModule
 from pyro.distributions.conditional import ConditionalTransformModule
 import math
@@ -24,7 +24,10 @@ import numpy as np
 
 class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
     """Base class for NFBLLBaseDecodeHead.
-
+    TODO: Implementation ideas:
+    [*] Use block normal distribution.
+    [*] Use BlockNAF on full param dim.
+    [*] Allow free movement of the rest of the parameters using a small lr 1e-5.
     Args:
         in_channels (int|Sequence[int]): Input channels.
         channels (int): Channels after modules, before conv_seg.
@@ -152,7 +155,7 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         self.vi_nsamples_train = vi_nsamples_train
         self.vi_nsamples_test = vi_nsamples_test
         if self.density_type == 'flow':
-            if self.flow_type in ('householder_flow', 'planar_flow', 'radial_flow', 'sylvester_flow', 'naf_flow'):
+            if self.flow_type in ('householder_flow', 'planar_flow', 'radial_flow', 'sylvester_flow', 'naf_flow', 'bnaf_flow', "polynomial_flow"):
                 self.density_estimation = DensityEstimation(
                     dim=self.latent_dim,
                     density_type=self.density_type,
@@ -209,16 +212,20 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
 
     def conv_seg_forward_x(self, x, z):
         # outputs bs = x.size(0)*z.size(0)
+
         if self.vi_use_lower_dim:
             z = self.density_estimation_to_params(z)
             assert z.size(-1) == self.conv_seg_params_numel
-            # joblib.dump(z.cpu().numpy(), 'proj_w_2xnaf_sig+1xfc.pkl')
-            # import ipdb; ipdb.set_trace()
+        #     import ipdb; ipdb.set_trace()
+        # import ipdb; ipdb.set_trace()
+        # joblib.dump(z.cpu().numpy(), 'proj_w_2xnaf_sig+1xfc.pkl')
+        # import ipdb; ipdb.set_trace()
         z_list = torch.split(z, 1, 0)
         output = []
         for z_ in z_list:
             z_ = z_.squeeze()
             output.append(F.conv2d(input=x, weight=z_[:self.w_numel].reshape(self.w_shape), bias=z_[-self.b_numel:].reshape(self.b_shape)))
+        # import ipdb; ipdb.set_trace()
         return torch.cat(output, dim=0)
 
     def conv_seg_forward(self, x, z):
@@ -447,13 +454,20 @@ class DensityEstimation(nn.Module):
             elif self.flow_type == 'householder_flow':
                 transforms = [Householder(input_dim=self.dim) for _ in range(self.flow_length)]
             elif self.flow_type == 'naf_flow':
-                # TODO: tryout IAF, DSF.
-                # Affine coupling.
-                # transforms = [affine_coupling(self.dim, hidden_dims=[2 * self.dim]) for _ in range(self.flow_length)]
-                transforms = [neural_autoregressive(input_dim=self.dim) for _ in range(self.flow_length)]
-                pass
+                width = 24
+                hidden_dims = [3 * self.dim + 1] * self.flow_length
+                transforms = [neural_autoregressive(input_dim=self.dim, hidden_dims=hidden_dims, width=width) for i in range(self.flow_length)]
+                # transforms = [neural_autoregressive(input_dim=self.dim) for i in range(self.flow_length)]
+            elif self.flow_type == 'bnaf_flow':
+                hidden_factors = [8, 8, 8]
+                transforms = [block_autoregressive(input_dim=self.dim, hidden_factors=hidden_factors, activation="sigmoid")
+                              for i in range(self.flow_length)]
+            elif self.flow_type == 'polynomial_flow':
+                # transforms = [polynomial(input_dim=self.dim, hidden_dims=[10 * self.dim for _ in range(self.flow_length)])]
+                transforms = [polynomial(input_dim=self.dim) for _ in range(self.flow_length)]
             else:
                 raise NotImplementedError
+
             if self.use_bn:
                 bn_indices = []
                 for i in range(self.flow_length):
@@ -563,11 +577,12 @@ class DensityEstimation(nn.Module):
                 x = x_next
             elif isinstance(self.flow[i], TransformModule):
                 x_next = self.flow[i](x)
+                # fdim = self.flow[i].arn.input_dim
+                # x_next = torch.cat((self.flow[i](x[:, -fdim:]), x[:, :-fdim]), dim=-1)
                 assert torch.isfinite(x_next).all()
                 inc = self.flow[i].log_abs_det_jacobian(x, x_next)
                 assert torch.isfinite(inc).all()
                 if isinstance(self.flow[i], BatchNorm):
-                    # import ipdb; ipdb.set_trace()
                     inc = inc.sum(-1)
                 x = x_next
             else:
