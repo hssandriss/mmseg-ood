@@ -2,7 +2,7 @@
 import os.path as osp
 import warnings
 from collections import OrderedDict
-
+from mmseg.models.losses import edl_kld
 import mmcv
 import numpy as np
 from mmcv.utils import print_log
@@ -309,18 +309,19 @@ class CustomDataset(Dataset):
             seg_max_prob = probs.max(dim=1)[0]
             seg_max_logit = bel.max(dim=1)[0]  # bel and ev are related through b_i = e_i /s
             ########## uncertainty maximization ##########
-            proj_prob = bel + u * (1 / num_cls)
-            um_u = torch.min(num_cls * proj_prob, dim=1, keepdim=True)[0]
-            um_bel = proj_prob - um_u * (1 / num_cls)
-            seg_um_u = um_u.squeeze()
+            # proj_prob = bel + u * (1 / num_cls)
+            # um_u = torch.min(num_cls * proj_prob, dim=1, keepdim=True)[0]
+            # um_bel = proj_prob - um_u * (1 / num_cls)
+            # seg_um_u = um_u.squeeze()
             ##############################################
             sb = bel.sum(1, keepdim=True)
             strength = (num_cls / (1 - sb + 1e-16))
             evidence = bel * strength
 
             alpha = evidence + 1
+            seg_um_u = edl_kld(alpha, num_cls).squeeze()
             seg_emp_entropy = - (probs * probs.clip(1e-6, 1).log()).sum(1)
-            # seg_dir_entropy = (torch.lgamma(alpha).sum(1, keepdim=True) - torch.lgamma(strength) -
+            # seg_dir_entropy = (torch.lgamma(alpha).sum(1, keepdim=True) - to  rch.lgamma(strength) -
             #                    (num_cls - strength) * torch.digamma(strength) -
             #                    ((alpha - 1.0) * torch.digamma(alpha)).sum(1, keepdim=True))
             # import ipdb; ipdb.set_trace()
@@ -493,15 +494,16 @@ class CustomDataset(Dataset):
 
             seg_max_logit = seg_logit_flat.max(dim=1)[0]
             seg_u = u.squeeze()
-
+            
             ########## uncertainty maximization ##########
             evi = alpha - 1
             bel = evi / strength
             disonnance = diss(bel)
-            proj_prob = bel + u * (1 / num_cls)
-            um_u = torch.min(num_cls * proj_prob, dim=1, keepdim=True)[0]
-            um_bel = proj_prob - um_u * (1 / num_cls)
-            seg_um_u = um_u.squeeze()
+            # proj_prob = bel + u * (1 / num_cls)
+            # um_u = torch.min(num_cls * proj_prob, dim=1, keepdim=True)[0]
+            # um_bel = proj_prob - um_u * (1 / num_cls)
+            # seg_um_u = um_u.squeeze()
+            seg_um_u = bel.max(dim=1)[0]
 
             ##############################################
             seg_emp_entropy = - (probs * probs.log()).sum(1)

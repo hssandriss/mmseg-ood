@@ -88,17 +88,16 @@ def mse_edl_loss(one_hot_gt, alpha, num_classes):
     return A, B, C, D, E
 
 
-def ce_edl_loss(one_hot_gt, alpha, num_classes, func, bis=False, with_var=False, reg=False):
+def ce_edl_loss(one_hot_gt, alpha, num_classes, func, bis=False, with_var=False, reg=False, entr=False):
     strength = torch.sum(alpha, dim=1, keepdim=True)
     # L_err
     A = torch.sum(one_hot_gt * (func(strength) - func(alpha)), axis=1, keepdims=True)
     B = torch.zeros_like(A.detach())
+    fake_alphas = alpha * (1 - one_hot_gt) + one_hot_gt
+    fake_strength = fake_alphas.sum(dim=1, keepdim=True)
     if bis:
-        B = torch.sum((1 - one_hot_gt) * (func(strength) - func(strength - alpha)), axis=1, keepdims=True)
-        # A = A + A_
+        B = torch.sum((1 - one_hot_gt) * (func(fake_strength) - func(fake_strength - fake_alphas)), axis=1, keepdims=True)
     if with_var:
-        fake_alphas = alpha * (1 - one_hot_gt) + one_hot_gt
-        fake_strength = fake_alphas.sum(dim=1, keepdim=True)
         B = torch.sum(
             (fake_alphas * (fake_strength - fake_alphas)) / (fake_strength * fake_strength * (fake_strength + 1)),
             dim=1, keepdim=True)  # fake var
@@ -106,7 +105,11 @@ def ce_edl_loss(one_hot_gt, alpha, num_classes, func, bis=False, with_var=False,
     if reg:
         # Larger coef cause difficulty to learn some classes
         B = 0.001 * (strength - (one_hot_gt * alpha).sum(dim=1, keepdims=True))
-
+    if entr:
+        # Increase entropy
+        log_beta = torch.lgamma(fake_alphas).sum(1, keepdim=True) - torch.lgamma(fake_strength)
+        B = - .1 * (log_beta + (fake_strength - num_classes) * torch.digamma(fake_strength) - ((fake_alphas - 1.0)
+                    * torch.digamma(fake_alphas)).sum(1, keepdim=True))
     # L_kl
     # alpha_kl = (alpha - 1) * (1 - one_hot_gt) + 1
     alpha_kl = alpha * (1 - one_hot_gt) + one_hot_gt
@@ -154,8 +157,8 @@ def EUC(alpha, one_hot_gt, num_classes):
 def lam(epoch_num, total_epochs, annealing_start, annealing_step, annealing_method, annealing_from):
     if annealing_method == 'step':
         annealing_coef = torch.min(torch.tensor(1.0, dtype=torch.float32), torch.tensor(
-            max(epoch_num - annealing_from, 0) / annealing_step, dtype=torch.float32)) * 0.1
-    if annealing_method == 'step_a':
+            max(epoch_num - annealing_from, 0) / annealing_step, dtype=torch.float32))
+    elif annealing_method == 'step_a':
         annealing_coef = torch.min(torch.tensor(1.0, dtype=torch.float32), torch.tensor(
             epoch_num / (total_epochs / 2), dtype=torch.float32)) * 0.1
     elif annealing_method == 'exp':
@@ -246,9 +249,9 @@ class EDLLoss(nn.Module):
         if self.epoch_num == self.epoch_num_ + 1 and self.epoch_num > 0:
             if np.mean(self.epoch_nums) % 1 != 0:
                 import ipdb; ipdb.set_trace()
-            # print_log(f"Temp: {self.temp[self.epoch_num_]}")
-            # print_log(f"Lam: {self.lam_schedule[self.epoch_num_]}")
-            # print_log(f"Epoch {self.epoch_num_} is done with {self.iter_cnt} iterations")
+            print_log(f"Temp: {self.temp[self.epoch_num_]}")
+            print_log(f"Lam: {self.lam_schedule[self.epoch_num_]}")
+            print_log(f"Epoch {self.epoch_num_} is done with {self.iter_cnt} iterations")
             self.iter_cnt = 0
             self.epoch_nums = []
         reduction = (reduction_override if reduction_override else self.reduction)
@@ -316,6 +319,15 @@ class EDLLoss(nn.Module):
                 loss = A + B
         elif self.loss_name.endswith("mll_reg"):  # Eq. 3 Maximum Likelihood Type II
             A, B, C, D, E = ce_edl_loss(one_hot_gt, alpha, self.num_classes, func=torch.log, bis=False, with_var=False, reg=True)
+            if self.regularization == 'kld':
+                loss = A + B + self.lam_schedule[self.epoch_num] * C
+            elif self.regularization == 'euc':
+                # D: acc_uncertain, E: inacc_certain
+                loss = A + B + self.lam_schedule[self.epoch_num] * D + (1. - self.lam_schedule[self.epoch_num]) * E
+            elif self.regularization == 'none':
+                loss = A + B
+        elif self.loss_name.endswith("mll_entr"):  # Eq. 3 Maximum Likelihood Type II
+            A, B, C, D, E = ce_edl_loss(one_hot_gt, alpha, self.num_classes, func=torch.log, bis=False, with_var=False, reg=False, entr=True)
             if self.regularization == 'kld':
                 loss = A + B + self.lam_schedule[self.epoch_num] * C
             elif self.regularization == 'euc':

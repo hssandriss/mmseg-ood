@@ -10,7 +10,7 @@ from .utils import reduce_loss, weight_reduce_loss, weighted_loss
 from .dummy_loss import DummyLoss, dummy_loss
 from .belief_matching_loss import BeliefMatchingLoss
 from .ldam_loss import LDAMLoss
-from .edl_loss import EDLLoss
+from .edl_loss import EDLLoss, KL as edl_kld
 from .mse_loss import MSELoss
 from .balanced_softmax_loss import BalancedSoftmaxLoss
 from .tversky_loss import TverskyLoss

@@ -268,6 +268,7 @@ class BaseDecodeHead(BaseModule, metaclass=ABCMeta):
         """
         seg_logits = self(inputs)
         # Added for self-distillation baseline
+        # assert len(self.last_conv_seg_output )== 0
         # self.last_conv_seg_output.append(seg_logits)
         losses = self.losses(seg_logits, gt_semantic_seg)
         return losses
