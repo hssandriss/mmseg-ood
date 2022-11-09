@@ -159,7 +159,7 @@ def lam(epoch_num, total_epochs, annealing_start, annealing_step, annealing_meth
         annealing_coef = torch.min(torch.tensor(1.0, dtype=torch.float32), torch.tensor(
             epoch_num / (total_epochs / 2), dtype=torch.float32)) * 0.1
     elif annealing_method == 'exp':
-        annealing_coef = torch.min(
+        annealing_coef = .1 * torch.min(
             annealing_start * torch.exp(-torch.log(annealing_start) / (annealing_step - 1) * epoch_num),
             torch.tensor(1.0, dtype=torch.float32))
     elif annealing_method == 'zero':

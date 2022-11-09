@@ -13,6 +13,8 @@ from .ldam_loss import LDAMLoss
 from .edl_loss import EDLLoss
 from .mse_loss import MSELoss
 from .balanced_softmax_loss import BalancedSoftmaxLoss
+from .tversky_loss import TverskyLoss
+
 __all__ = [
     'accuracy', 'Accuracy', 'cross_entropy', 'binary_cross_entropy',
     'mask_cross_entropy', 'CrossEntropyLoss', 'reduce_loss',

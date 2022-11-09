@@ -10,7 +10,6 @@ from mmseg.core import build_pixel_sampler
 from mmseg.ops import resize
 from ..builder import build_loss
 from ..losses import accuracy
-import torch.nn.functional as F
 
 
 class BaseDecodeHead(BaseModule, metaclass=ABCMeta):
@@ -100,6 +99,30 @@ class BaseDecodeHead(BaseModule, metaclass=ABCMeta):
            self.downsample_label_ratio < 0:
             warnings.warn('downsample_label_ratio should '
                           'be set as an integer equal or larger than 0.')
+
+        if out_channels is None:
+            if num_classes == 2:
+                warnings.warn('For binary segmentation, we suggest using'
+                              '`out_channels = 1` to define the output'
+                              'channels of segmentor, and use `threshold`'
+                              'to convert seg_logist into a prediction'
+                              'applying a threshold')
+            out_channels = num_classes
+
+        if out_channels != num_classes and out_channels != 1:
+            raise ValueError(
+                'out_channels should be equal to num_classes,'
+                'except binary segmentation set out_channels == 1 and'
+                f'num_classes == 2, but got out_channels={out_channels}'
+                f'and num_classes={num_classes}')
+
+        if out_channels == 1 and threshold is None:
+            threshold = 0.3
+            warnings.warn('threshold is not defined for binary, and defaults'
+                          'to 0.3')
+        self.num_classes = num_classes
+        self.out_channels = out_channels
+        self.threshold = threshold
 
         if out_channels is None:
             if num_classes == 2:
@@ -243,9 +266,9 @@ class BaseDecodeHead(BaseModule, metaclass=ABCMeta):
         Returns:
             dict[str, Tensor]: a dictionary of loss components
         """
-        seg_logits = self.forward(inputs)
+        seg_logits = self(inputs)
         # Added for self-distillation baseline
-        self.last_conv_seg_output.append(seg_logits)
+        # self.last_conv_seg_output.append(seg_logits)
         losses = self.losses(seg_logits, gt_semantic_seg)
         return losses
 
@@ -270,7 +293,6 @@ class BaseDecodeHead(BaseModule, metaclass=ABCMeta):
         """Classify each pixel."""
         if self.dropout is not None:
             feat = self.dropout(feat)
-            # Here I can add weight normalization
         output = self.conv_seg(feat)
         return output
 
@@ -354,10 +376,10 @@ class BaseDecodeHead(BaseModule, metaclass=ABCMeta):
                         ignore_index=self.ignore_index)
                     if loss_decode.loss_name.startswith("loss_edl"):
                         # For dist training ensure that all log values are in tensors and loaded in cuda
-                        # logs = loss_decode.get_logs(seg_logit,
-                        #                             seg_label,
-                        #                             self.ignore_index)
-                        # loss.update(logs)
+                        logs = loss_decode.get_logs(seg_logit,
+                                                    seg_label,
+                                                    self.ignore_index)
+                        loss.update(logs)
                         pass
             else:
                 if self.use_bags:

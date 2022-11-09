@@ -15,12 +15,10 @@ from mmcv.utils import Config, DictAction, get_git_hash
 
 from mmseg import __version__
 from mmseg.apis import init_random_seed, set_random_seed, train_segmentor
-from mmseg.apis import init_random_seed, set_random_seed, train_segmentor
 from mmseg.datasets import build_dataset
 from mmseg.models import build_segmentor
 from mmseg.utils import (collect_env, get_device, get_root_logger,
                          setup_multi_processes)
-import subprocess
 
 
 def parse_args():
@@ -154,7 +152,6 @@ def main():
         # use config filename as default work_dir if cfg.work_dir is None
         cfg.work_dir = osp.join('./work_dirs', "_".join([osp.splitext(osp.basename(args.config))
                                 [0], datetime.now().strftime("%Y%m%d%H%M%S"), args.experiment_tag]))
-
     if args.load_from is not None:
         cfg.load_from = args.load_from
     if args.resume_from is not None:
@@ -259,18 +256,7 @@ def main():
         model = revert_sync_batchnorm(model)
 
     logger.info(model)
-    if args.use_bags:
-        setattr(model.decode_head, "use_bags", True)
-        setattr(model.decode_head, "bags_kwargs", dict(
-                num_bags=datasets[0].num_bags,
-                label2bag=datasets[0].label2bag,
-                bag_label_maps=datasets[0].bag_label_maps,
-                bag_masks=datasets[0].bag_masks,
-                bags_classes=datasets[0].bags_classes,
-                bag_class_counts=datasets[0].bag_class_counts
-                ))
-    else:
-        setattr(model.decode_head, "use_bags", False)
+
     # add an attribute for visualization convenience
     model.CLASSES = datasets[0].CLASSES
     # passing checkpoint meta for saving best checkpoint
@@ -286,19 +272,6 @@ def main():
         validate=(not args.no_validate),
         timestamp=timestamp,
         meta=meta)
-
-    # When testing on cityscapes use roadanomaly
-    conf = args.config.replace("cityscapes", "roadanomaly")
-    if not args.use_bags:
-        subprocess.run(["python", os.path.join("tools", "test.py"),
-                        conf, "--work-dir", cfg.work_dir, "--eval", "mIoU",
-                        # "--show-dir", os.path.join(cfg.work_dir, "test_results_img"),
-                        ], cwd=".")
-    else:
-        subprocess.run(["python", os.path.join("tools", "test.py"),
-                        conf, "--work-dir", cfg.work_dir, "--eval", "mIoU", "--use-bags",
-                        # "--show-dir", os.path.join(cfg.work_dir, "test_results_img"),
-                        ], cwd=".")
 
 
 if __name__ == '__main__':
