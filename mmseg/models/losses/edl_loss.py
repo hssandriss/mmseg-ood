@@ -249,7 +249,7 @@ class EDLLoss(nn.Module):
         if self.epoch_num == self.epoch_num_ + 1 and self.epoch_num > 0:
             if np.mean(self.epoch_nums) % 1 != 0:
                 import ipdb; ipdb.set_trace()
-            print_log(f"Temp: {self.temp[self.epoch_num_]}")
+            # print_log(f"Temp: {self.temp[self.epoch_num_]}")
             print_log(f"Lam: {self.lam_schedule[self.epoch_num_]}")
             print_log(f"Epoch {self.epoch_num_} is done with {self.iter_cnt} iterations")
             self.iter_cnt = 0

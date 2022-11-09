@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import warnings
 from abc import ABCMeta, abstractmethod
 
 import torch
@@ -70,6 +71,8 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
                  channels,
                  *,
                  num_classes,
+                 out_channels=None,
+                 threshold=None,
                  dropout_ratio=0.1,
                  conv_cfg=None,
                  norm_cfg=None,
@@ -110,6 +113,29 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         self.align_corners = align_corners
         self.use_bn_flow = use_bn_flow
         self.initialize_at_w_map = initialize_at_w_map
+        if out_channels is None:
+            if num_classes == 2:
+                warnings.warn('For binary segmentation, we suggest using'
+                              '`out_channels = 1` to define the output'
+                              'channels of segmentor, and use `threshold`'
+                              'to convert seg_logist into a prediction'
+                              'applying a threshold')
+            out_channels = num_classes
+
+        if out_channels != num_classes and out_channels != 1:
+            raise ValueError(
+                'out_channels should be equal to num_classes,'
+                'except binary segmentation set out_channels == 1 and'
+                f'num_classes == 2, but got out_channels={out_channels}'
+                f'and num_classes={num_classes}')
+
+        if out_channels == 1 and threshold is None:
+            threshold = 0.3
+            warnings.warn('threshold is not defined for binary, and defaults'
+                          'to 0.3')
+        self.num_classes = num_classes
+        self.out_channels = out_channels
+        self.threshold = threshold
         if isinstance(loss_decode, dict):
             self.loss_decode = build_loss(loss_decode)
         elif isinstance(loss_decode, (list, tuple)):
@@ -125,7 +151,7 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         else:
             self.sampler = None
 
-        self.conv_seg = nn.Conv2d(channels, num_classes, kernel_size=1)
+        self.conv_seg = nn.Conv2d(channels, self.out_channels, kernel_size=1)
         if dropout_ratio > 0:
             self.dropout = nn.Dropout2d(dropout_ratio)
         else:

@@ -286,7 +286,7 @@ class CustomDataset(Dataset):
             self.gt_seg_map_loader(results)
             yield results['gt_semantic_seg']
 
-    def pre_eval_custom_many_samples(self, seg_logit, seg_gt, logit2prob="softmax", logit_fn=lambda x: x):
+    def pre_eval_custom_many_samples(self, seg_logit, seg_gt, logit2prob="softmax", logit_fn=lambda x: x, fusion_fn=lambda x: x):
         NA = np.nan  # value when metric is not used
         seg_logit = seg_logit.cpu()
         num_cls = seg_logit.shape[1]
@@ -300,7 +300,7 @@ class CustomDataset(Dataset):
             ignore_bg_mask = torch.zeros_like(seg_gt_tensor_flat)
 
         if logit2prob == "edl":
-            bel, u, probs = logit_fn(seg_logit)
+            bel, u, probs = fusion_fn(logit_fn(seg_logit))
             bel = bel.flatten(2, -1).squeeze(0).permute(1, 0)
             probs = probs.flatten(2, -1).squeeze(0).permute(1, 0)
             u = u.flatten(2, -1).squeeze(0).permute(1, 0)
@@ -314,13 +314,21 @@ class CustomDataset(Dataset):
             # um_bel = proj_prob - um_u * (1 / num_cls)
             # seg_um_u = um_u.squeeze()
             ##############################################
-            sb = bel.sum(1, keepdim=True)
-            strength = (num_cls / (1 - sb + 1e-16))
-            evidence = bel * strength
+            # sb = bel.sum(1, keepdim=True)
+            # strength = (num_cls / (1 - sb + 1e-16))
+            # evidence = bel * strength
 
-            alpha = evidence + 1
-            seg_um_u = edl_kld(alpha, num_cls).squeeze()
+            # alpha = evidence + 1
+            # seg_um_u = edl_kld(alpha, num_cls).squeeze()
             seg_emp_entropy = - (probs * probs.clip(1e-6, 1).log()).sum(1)
+            
+            indiv_alphas = logit_fn(seg_logit)
+            indiv_s = indiv_alphas.sum(1, keepdim=True)
+            indiv_u =  num_cls/ indiv_s
+            # import ipdb; ipdb.set_trace()
+            seg_um_u = indiv_u.var(0, keepdim=True).flatten(2, -1).squeeze(0).permute(1, 0).squeeze()
+
+
             # seg_dir_entropy = (torch.lgamma(alpha).sum(1, keepdim=True) - to  rch.lgamma(strength) -
             #                    (num_cls - strength) * torch.digamma(strength) -
             #                    ((alpha - 1.0) * torch.digamma(alpha)).sum(1, keepdim=True))

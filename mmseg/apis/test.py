@@ -311,19 +311,15 @@ def single_gpu_test(model,
             if torchmodel.decode_head.loss_decode.loss_name.startswith("loss_edl") and n_samples > 1:
                 _, _, probs_f = avgfusion(logit2alpha(seg_logit))
                 # _, _, probs_f = wfusion(logit2alpha(seg_logit))
-                result = [probs_f.max(1)[1].squeeze().cpu().numpy()]
+                result = [probs_f.max(1)[1].squeeze().cpu().numpy()] # predictions
             result_seg = dataset.pre_eval(result, indices=batch_indices)[0]
             # For added metrics OOD, calibration
             if not torchmodel.decode_head.use_bags:
                 if torchmodel.decode_head.loss_decode.loss_name.startswith("loss_edl"):
                     # For EDL probs
                     if n_samples > 1:
-                        # def logit_fn(x): return ccfusion(logit2alpha(x), torchmodel.decode_head.combinations)
-                        # result_oth = dataset.pre_eval_custom_many_samples(seg_logit, seg_gt, "edl", logit_fn=logit_fn)
-                        def logit_fn(x): return avgfusion(logit2alpha(x))
-                        result_oth = dataset.pre_eval_custom_many_samples(seg_logit, seg_gt, "edl", logit_fn=logit_fn)
-                        # def logit_fn(x): return wfusion(logit2alpha(x))
-                        # result_oth = dataset.pre_eval_custom_many_samples(seg_logit, seg_gt, "edl", logit_fn=logit_fn)
+                        result_oth = dataset.pre_eval_custom_many_samples(seg_logit, seg_gt, "edl", logit_fn=logit2alpha, fusion_fn=avgfusion)
+                        result_oth = dataset.pre_eval_custom_many_samples(seg_logit, seg_gt, "edl", logit_fn=logit2alpha, fusion_fn=wfusion)
 
                     else:
                         result_oth = dataset.pre_eval_custom_single_sample(seg_logit, seg_gt, "edl", logit_fn=logit2alpha)
