@@ -238,11 +238,11 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
 
     def conv_seg_forward_x(self, x, z):
         # outputs bs = x.size(0)*z.size(0)
-
+        # z = F.interpolate(z.unsqueeze(1), size=self.conv_seg_params_numel, mode='linear').squeeze() # doesn't work
+        # assert z.size(-1) == self.conv_seg_params_numel
         if self.vi_use_lower_dim:
             z = self.density_estimation_to_params(z)
             assert z.size(-1) == self.conv_seg_params_numel
-        #     import ipdb; ipdb.set_trace()
         # import ipdb; ipdb.set_trace()
         # joblib.dump(z.cpu().numpy(), 'proj_w_2xnaf_sig+1xfc.pkl')
         # import ipdb; ipdb.set_trace()
@@ -480,14 +480,39 @@ class DensityEstimation(nn.Module):
             elif self.flow_type == 'householder_flow':
                 transforms = [Householder(input_dim=self.dim) for _ in range(self.flow_length)]
             elif self.flow_type == 'naf_flow':
-                width = 24
-                hidden_dims = [3 * self.dim + 1] * self.flow_length
-                transforms = [neural_autoregressive(input_dim=self.dim, hidden_dims=hidden_dims, width=width) for i in range(self.flow_length)]
+
+                # Custom params:
+                # transforms = [neural_autoregressive(input_dim=self.dim, hidden_dims=[3 * self.dim + 1] * self.flow_length, width=24) for i in range(self.flow_length)]
+
+                # Defaults:
                 # transforms = [neural_autoregressive(input_dim=self.dim) for i in range(self.flow_length)]
+
+                # Use a multiscale-architecture:
+                self.multi_scale_masks = [torch.ones(self.dim, dtype=torch.bool) for _ in range(self.flow_length)]
+
+                r = 2
+                current_dims = self.dim
+                for step in range(self.flow_length):
+                    self.multi_scale_masks[step][current_dims:] = False
+                    current_dims //= r
+                # import ipdb; ipdb.set_trace()
+                transforms = [neural_autoregressive(input_dim=int(mask.sum())) for mask in self.multi_scale_masks]
+
             elif self.flow_type == 'bnaf_flow':
-                hidden_factors = [8, 8, 8]
-                transforms = [block_autoregressive(input_dim=self.dim, hidden_factors=hidden_factors, activation="sigmoid")
-                              for i in range(self.flow_length)]
+                # # Custom params:
+                # transforms = [block_autoregressive(input_dim=self.dim, hidden_factors=[8, 8, 8], activation="sigmoid")
+                #               for _ in range(self.flow_length)]
+                # # Defaults:            
+                # transforms = [block_autoregressive(input_dim=self.dim, activation="sigmoid") for i in range(self.flow_length)]
+                self.multi_scale_masks = [torch.ones(self.dim, dtype=torch.bool) for _ in range(self.flow_length)]
+                r = 2
+                current_dims = self.dim
+                for step in range(self.flow_length):
+                    self.multi_scale_masks[step][current_dims:] = False
+                    current_dims //= r
+                # import ipdb; ipdb.set_trace()
+                transforms = [block_autoregressive(input_dim=int(mask.sum()), activation="sigmoid") for mask in self.multi_scale_masks]
+
             elif self.flow_type == 'polynomial_flow':
                 # transforms = [polynomial(input_dim=self.dim, hidden_dims=[10 * self.dim for _ in range(self.flow_length)])]
                 transforms = [polynomial(input_dim=self.dim) for _ in range(self.flow_length)]
@@ -602,9 +627,8 @@ class DensityEstimation(nn.Module):
                 inc = self.flow[i].condition(feats).log_abs_det_jacobian(x, x_next)
                 x = x_next
             elif isinstance(self.flow[i], TransformModule):
-                x_next = self.flow[i](x)
-                # fdim = self.flow[i].arn.input_dim
-                # x_next = torch.cat((self.flow[i](x[:, -fdim:]), x[:, :-fdim]), dim=-1)
+                # x_next = self.flow[i](x)
+                x_next = torch.cat((self.flow[i](x[:, self.multi_scale_masks[i]]), x[:, ~self.multi_scale_masks[i]]), dim=-1)
                 assert torch.isfinite(x_next).all()
                 inc = self.flow[i].log_abs_det_jacobian(x, x_next)
                 assert torch.isfinite(inc).all()

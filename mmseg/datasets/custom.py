@@ -327,8 +327,6 @@ class CustomDataset(Dataset):
             indiv_u =  num_cls/ indiv_s
             # import ipdb; ipdb.set_trace()
             seg_um_u = indiv_u.var(0, keepdim=True).flatten(2, -1).squeeze(0).permute(1, 0).squeeze()
-
-
             # seg_dir_entropy = (torch.lgamma(alpha).sum(1, keepdim=True) - to  rch.lgamma(strength) -
             #                    (num_cls - strength) * torch.digamma(strength) -
             #                    ((alpha - 1.0) * torch.digamma(alpha)).sum(1, keepdim=True))

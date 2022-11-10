@@ -319,7 +319,7 @@ def single_gpu_test(model,
                     # For EDL probs
                     if n_samples > 1:
                         result_oth = dataset.pre_eval_custom_many_samples(seg_logit, seg_gt, "edl", logit_fn=logit2alpha, fusion_fn=avgfusion)
-                        result_oth = dataset.pre_eval_custom_many_samples(seg_logit, seg_gt, "edl", logit_fn=logit2alpha, fusion_fn=wfusion)
+                        # result_oth = dataset.pre_eval_custom_many_samples(seg_logit, seg_gt, "edl", logit_fn=logit2alpha, fusion_fn=wfusion)
 
                     else:
                         result_oth = dataset.pre_eval_custom_single_sample(seg_logit, seg_gt, "edl", logit_fn=logit2alpha)
