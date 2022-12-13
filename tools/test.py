@@ -60,6 +60,11 @@ def parse_args():
         action='store_true',
         help='whether to use gpu to collect results.')
     parser.add_argument(
+        '--fusion',
+        choices=['af', 'wf'],
+        default='af',
+        help='job launcher')
+    parser.add_argument(
         '--gpu-id',
         type=int,
         default=0,
@@ -129,7 +134,6 @@ def parse_args():
 def main():
     import warnings; warnings.filterwarnings("ignore")
     args = parse_args()
-
     # print(vars(args))
 
     assert args.out or args.eval or args.format_only or args.show \
@@ -148,12 +152,23 @@ def main():
     if args.cfg_options is not None:
         cfg.merge_from_dict(args.cfg_options)
 
+    fusion_method = args.fusion
+    
     # set multi-process settings
     setup_multi_processes(cfg)
 
     # set cudnn_benchmark
-    if cfg.get('cudnn_benchmark', False):
-        torch.backends.cudnn.benchmark = True
+    # if cfg.get('cudnn_benchmark', False):
+    #     torch.backends.cudnn.benchmark = True
+    # import random
+    # seed = 12345
+    # torch.manual_seed(seed)
+    # torch.cuda.manual_seed(seed)
+    # # torch.backends.cudnn.benchmark = False
+    # random.seed(seed)
+    # np.random.seed(seed)
+    # torch.use_deterministic_algorithms(True)
+    
     if args.aug_test:
         # hard code index
         cfg.data.test.pipeline[1].img_ratios = [
@@ -234,6 +249,11 @@ def main():
     all_checkpoints = [os.path.join(args.work_dir, file) for file in os.listdir(args.work_dir) if file.endswith(".pth") and file != "latest.pth"]
     all_checkpoints.sort(key=lambda file: int(re.search(r"(?:epoch)_([0-9]+).(?:pth)$", osp.basename(file)).groups()[0]))
     all_checkpoints_iter = [int(re.search(r"(?:epoch)_([0-9]+).(?:pth)$", osp.basename(file)).groups()[0]) for file in all_checkpoints]
+    
+    # indices_to_keep =  [i for i, x in enumerate(all_checkpoints_iter) if x%10==0]
+    # all_checkpoints = [all_checkpoints[i] for i in indices_to_keep]
+    # all_checkpoints_iter = [all_checkpoints_iter[i] for i in indices_to_keep]
+    
     reg_ood_summary = pd.DataFrame(
         columns=["epoch", 'max_prob.auroc', 'max_prob.aupr', 'max_prob.fpr95', 'max_logit.auroc', 'max_logit.aupr',
                  'max_logit.fpr95', 'emp_entropy.auroc', 'emp_entropy.aupr', 'emp_entropy.fpr95'])
@@ -339,7 +359,9 @@ def main():
                 args.opacity,
                 pre_eval=args.eval is not None and not eval_on_format_results,
                 format_only=args.format_only or eval_on_format_results,
-                format_args=eval_kwargs)
+                format_args=eval_kwargs,
+                fusion_method=fusion_method,
+                work_dir=args.work_dir)
         else:
             model = build_ddp(
                 model,
@@ -486,9 +508,13 @@ def main():
     suffixe = re.search(r"(?:[0-9]{14})_(.*)$", args.work_dir).groups()[0]
     with open(os.path.join(args.work_dir, f"test_results_all_{suffixe}.json" if args.all else f"test_results_{suffixe}.json"), "w") as f:
         json.dump(ans, f)
-    reg_ood_summary.to_csv(os.path.join(args.work_dir, f'reg_ood_metrics_{suffixe}.csv'))
-    sl_ood_summary.to_csv(os.path.join(args.work_dir, f'sl_ood_metrics_{suffixe}.csv'))
-
+    
+    if not hasattr(cfg.model.decode_head, "vi_nsamples_test"):
+        fusion_method= 'none'
+    
+    reg_ood_summary.to_csv(os.path.join(args.work_dir, f"reg_ood_metrics_{suffixe}_{fusion_method}{'_subtest' if args.config.endswith('subtest.py') else ''}.csv"))
+    sl_ood_summary.to_csv(os.path.join(args.work_dir, f"sl_ood_metrics_{suffixe}_{fusion_method}{'_subtest' if args.config.endswith('subtest.py') else ''}.csv"))
+    import ipdb; ipdb.set_trace()
 
 if __name__ == '__main__':
     main()

@@ -10,6 +10,7 @@ from mmseg.core import build_pixel_sampler
 from mmseg.ops import resize
 from ..builder import build_loss
 from ..losses import accuracy
+import torch.nn.functional as F
 
 
 class BaseDecodeHead(BaseModule, metaclass=ABCMeta):
@@ -290,11 +291,22 @@ class BaseDecodeHead(BaseModule, metaclass=ABCMeta):
         """
         return self.forward(inputs)
 
+    # def cls_seg(self, feat):
+    #     """Classify each pixel."""
+    #     output = []
+    #     self.dropout.train()
+    #     for _ in range(20):
+    #         feat_i = self.dropout(feat)
+    #         output.append(self.conv_seg(feat_i))
+    #     return torch.cat(output, dim=0)
+
     def cls_seg(self, feat):
         """Classify each pixel."""
         if self.dropout is not None:
             feat = self.dropout(feat)
         output = self.conv_seg(feat)
+        # norm= torch.norm(output.flatten(2, -1), dim=-1, p=2, keepdim=True).unsqueeze(-1)
+        # output = output / torch.max(norm, torch.ones_like(norm)*1e-6)
         return output
 
     @force_fp32(apply_to=('seg_logit', ))

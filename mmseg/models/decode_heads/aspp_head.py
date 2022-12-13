@@ -7,7 +7,7 @@ from mmseg.ops import resize
 from ..builder import HEADS
 from .decode_head import BaseDecodeHead
 from .bll_decode_head import BllBaseDecodeHead
-
+import joblib
 
 class ASPPModule(nn.ModuleList):
     """Atrous Spatial Pyramid Pooling (ASPP) Module.
@@ -203,7 +203,8 @@ class ASPPBllHead(BllBaseDecodeHead):
         # torch.cuda.synchronize()
         # t1 = time.time()
         if nsamples == 1 and self.density_type == 'flow':
-            z0 = self.density_estimation.z0_mean.data.unsqueeze(0)
+            # z0 = self.density_estimation.z0_mean.data.unsqueeze(0)
+            z0 = self.density_estimation.sample_base(1)
             zk, sum_log_jacobians = self.density_estimation.forward_flow(z0, low_feats)
             output = self.cls_seg_x(output, zk)
             # Reverse KLD: https://arxiv.org/abs/1912.02762 page 7 Eq. 17-18
@@ -212,8 +213,15 @@ class ASPPBllHead(BllBaseDecodeHead):
             # kl = self.density_estimation.flow_kl_loss_analytical(sum_log_jacobians)
             return output, kl
         elif nsamples > 1 and self.density_type == 'flow':
-            z0 = self.density_estimation.sample_base(nsamples)
+            # z0 = self.density_estimation.sample_base(nsamples)
+            # joblib.dump(z0.detach().cpu().numpy(), 'base_samples.pkl')
+            # import ipdb; ipdb.set_trace()
+            z0 = torch.as_tensor(joblib.load('base_samples.pkl')).to(output.device)
+
             zk, sum_log_jacobians = self.density_estimation.forward_flow(z0, low_feats)
+            joblib.dump(zk.detach().cpu().numpy(), 'naf_samples.pkl')
+            print("Variance of z >>>>>", zk.var(0).mean())
+            
             output = self.cls_seg_x(output, zk)
             # Reverse KLD: https://arxiv.org/abs/1912.02762 page 7 Eq. 17-18
             # kl = - sum_log_jacobians.mean()
@@ -250,9 +258,11 @@ class ASPPBllHead(BllBaseDecodeHead):
             return output, kl
         elif nsamples > 1 and self.density_type in ('full_normal', 'fact_normal'):
             L = self.density_estimation._L
-            # import ipdb; ipdb.set_trace()
-            z0 = self.density_estimation.sample_base(nsamples)
+            # z0 = self.density_estimation.sample_base(nsamples)
+            z0 = torch.as_tensor(joblib.load('base_samples.pkl')).to(output.device)
             zk = self.density_estimation.forward_normal(z0, L)
+            joblib.dump(zk.detach().cpu().numpy(), 'full_normal_samples.pkl')
+            print("Variance of z >>>>>", zk.var(0).mean())
             kl = self.density_estimation.normal_kl_loss(L)
             output = self.cls_seg_x(output, zk)
             return output, kl

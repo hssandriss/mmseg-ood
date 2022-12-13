@@ -116,35 +116,42 @@ def train_segmentor(model,
                 'Please use MMCV >= 1.4.4 for CPU training!'
         model = build_dp(model, cfg.device, device_ids=cfg.gpu_ids)
 
-    # build runner
-
-    # Check if we are applying BLL
-    is_bll = 'bll' in cfg.model.decode_head.type.lower()
-
-    if is_bll:
-        optim_type = cfg.optimizer.pop('type')
-        assert optim_type == 'SGD', "currently just SGD is supported for BLL models"
-        # optimizer = torch.optim.SGD([{"params": [p for name, p in model.named_parameters() if "density_estimation" in name], **cfg.optimizer},
-        #                             {"params": [p for name, p in model.named_parameters() if "density_estimation" not in name]}], lr=1e-5)
-        optimizer = torch.optim.SGD(params=[p for name, p in model.named_parameters() if "density_estimation" in name], **cfg.optimizer)
-        # cfg.optimizer.pop('momentum')
-        # optimizer = torch.optim.Adam(params=[p for name, p in model.named_parameters() if "density_estimation" in name], **cfg.optimizer)
-    else:
-        optimizer = build_optimizer(model, cfg.optimizer)
-
-    if cfg.get('runner') is None:
-        cfg.runner = {'type': 'IterBasedRunner', 'max_iters': cfg.total_iters}
-        warnings.warn(
-            'config is now expected to have a `runner` section, '
-            'please set `runner` in your config.', UserWarning)
-
     # Freeze up to last layer
     freeze_features = meta.pop("freeze_features", False)
     # Freeze up the encoder
     freeze_encoder = meta.pop("freeze_encoder", False)
     # reinitialize the last layer parameters
     init_not_frozen = meta.pop("init_not_frozen", False)
+    # Check if we are applying BLL
+    is_bll = 'bll' in cfg.model.decode_head.type.lower()
+    # freeze_features = True
+    # init_not_frozen = True
+    if is_bll:
+        optim_type = cfg.optimizer.pop('type')
+        if optim_type == 'SGD':
+            optimizer = torch.optim.SGD(params=[p for name, p in model.named_parameters() if "density_estimation" in name], **cfg.optimizer)
+        elif optim_type == 'Adam':
+            cfg.optimizer.pop('momentum')
+            optimizer = torch.optim.Adam(params=[p for name, p in model.named_parameters() if "density_estimation" in name], **cfg.optimizer)
+        else:
+            raise NotImplementedError
+    else:
+        if freeze_features:
+            optim_type = cfg.optimizer.pop('type')
+            optimizer = torch.optim.SGD(params=[p for name, p in model.named_parameters() if "conv_seg" in name], **cfg.optimizer)
+        elif freeze_encoder:
+            raise NotImplementedError
+            optim_type = cfg.optimizer.pop('type')
+            optimizer = torch.optim.SGD(params=[p for name, p in model.named_parameters() if "conv_seg" in name], **cfg.optimizer)
+        else:
+            optimizer = build_optimizer(model, cfg.optimizer)
 
+    if cfg.get('runner') is None:
+        cfg.runner = {'type': 'IterBasedRunner', 'max_iters': cfg.total_iters}
+        warnings.warn(
+            'config is now expected to have a `runner` section, '
+            'please set `runner` in your config.', UserWarning)
+    # build runner
     assert not (freeze_encoder and freeze_features), "freeze encoder and freeze features are mutually exclusive"
     runner = build_runner(
         cfg.runner,
@@ -228,8 +235,8 @@ def train_segmentor(model,
         runner.model.module.freeze_encoder()
         runner.model.module.freeze_decoder_except_density_estimation()
     elif cfg.load_from and not is_bll:
-        runner.load_checkpoint(cfg.load_from)
         if freeze_encoder and init_not_frozen:
+
             ckpt = torch.load(cfg.load_from)
             to_keep = [k for k in ckpt["state_dict"].keys() if k.startswith('backbone')]
             to_delete = [k for k in ckpt["state_dict"].keys() if not k.startswith('backbone')]
@@ -237,15 +244,25 @@ def train_segmentor(model,
                 del ckpt["state_dict"][k]
             cfg.load_from = os.path.join(cfg.work_dir, "src.pth")
             torch.save(ckpt, cfg.load_from)
-        if freeze_features and init_not_frozen:
+            runner.load_checkpoint(cfg.load_from)
+            runner.model.module.freeze_encoder()
+            runner.model.module.freeze_feature_extractor()
+        elif freeze_features and init_not_frozen:
             ckpt = torch.load(cfg.load_from)
             to_delete = [k for k in ckpt["state_dict"].keys() if k.startswith("decode_head.conv_seg")]
             to_keep = [k for k in ckpt["state_dict"].keys() if not k.startswith('decode_head.conv_seg')]
+
             for k in to_delete:
                 del ckpt["state_dict"][k]
             cfg.load_from = os.path.join(cfg.work_dir, "src.pth")
             torch.save(ckpt, cfg.load_from)
-        runner.load_checkpoint(cfg.load_from)
+            # import ipdb; ipdb.set_trace()
+            runner.load_checkpoint(cfg.load_from)
+            runner.model.module.freeze_encoder()
+            runner.model.module.freeze_feature_extractor()
+            # import ipdb; ipdb.set_trace()
+        else:
+            runner.load_checkpoint(cfg.load_from)
     else:
         pass
 

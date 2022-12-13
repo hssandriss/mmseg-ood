@@ -30,7 +30,7 @@ def sigmoid_evidence(logits):
 def exp_evidence(logits):
     # This one usually works better and used for the second and third examples
     # For general settings and different datasets, you may try this one first
-    return torch.exp(torch.clip(logits / 10, -20., 20.))
+    return torch.exp(torch.clip(logits, -20., 20.))
 
 
 def exp_0_evidence(logits):
@@ -64,6 +64,16 @@ def softplus_evidence(logits):
     # usually behaves better than the relu_evidence
     return F.softplus(logits)
 
+def softplus_sq_evidence(logits):
+    # This one is another alternative and
+    # usually behaves better than the relu_evidence
+    return F.softplus(logits)**2
+
+def elu_sq_evidence(logits):
+    # This one is another alternative and
+    # usually behaves better than the relu_evidence
+    return (F.elu(logits) + 1)**2
+
 
 def mse_edl_loss(one_hot_gt, alpha, num_classes):
     strength = torch.sum(alpha, dim=1, keepdim=True)
@@ -91,7 +101,8 @@ def mse_edl_loss(one_hot_gt, alpha, num_classes):
 def ce_edl_loss(one_hot_gt, alpha, num_classes, func, bis=False, with_var=False, reg=False, entr=False):
     strength = torch.sum(alpha, dim=1, keepdim=True)
     # L_err
-    A = torch.sum(one_hot_gt * (func(strength) - func(alpha)), axis=1, keepdims=True)
+    A = torch.sum(one_hot_gt * (func(strength) - func(alpha)), axis=1, keepdims=True) 
+    # + torch.sum(alpha * (strength - alpha) / (strength * strength * (strength + 1)), dim=1, keepdim=True)
     B = torch.zeros_like(A.detach())
     fake_alphas = alpha * (1 - one_hot_gt) + one_hot_gt
     fake_strength = fake_alphas.sum(dim=1, keepdim=True)
@@ -101,10 +112,10 @@ def ce_edl_loss(one_hot_gt, alpha, num_classes, func, bis=False, with_var=False,
         B = torch.sum(
             (fake_alphas * (fake_strength - fake_alphas)) / (fake_strength * fake_strength * (fake_strength + 1)),
             dim=1, keepdim=True)  # fake var
-        B = - 0.1 * B.log()  # increase var
+        B = - 0.01 * B.log()  # increase var
     if reg:
         # Larger coef cause difficulty to learn some classes
-        B = 0.001 * (strength - (one_hot_gt * alpha).sum(dim=1, keepdims=True))
+        B = 0.0001 * (strength - (one_hot_gt * alpha).sum(dim=1, keepdims=True))
     if entr:
         # Increase entropy
         log_beta = torch.lgamma(fake_alphas).sum(1, keepdim=True) - torch.lgamma(fake_strength)
@@ -179,8 +190,8 @@ def lam(epoch_num, total_epochs, annealing_start, annealing_step, annealing_meth
 @ LOSSES.register_module
 class EDLLoss(nn.Module):
 
-    def __init__(self, num_classes, loss_variant="mse", annealing_step=10, annealing_method="zero", annealing_from=1, total_epochs=70,
-                 annealing_start=0.01, logit2evidence="exp", regularization="kld", reduction="mean", loss_weight=1.0, pow_alpha=False,
+    def __init__(self, num_classes, loss_variant="mll", annealing_step=10, annealing_method="zero", annealing_from=1, total_epochs=70,
+                 annealing_start=0.01, logit2evidence="elu", regularization="kld", reduction="mean", loss_weight=1.0, pow_alpha=True,
                  avg_non_ignore=True, loss_name='loss_edl'):
         super(EDLLoss, self).__init__()
         self.reduction = reduction
@@ -199,10 +210,14 @@ class EDLLoss(nn.Module):
             self.logit2evidence = sigmoid_evidence
         elif logit2evidence == "softplus":
             self.logit2evidence = softplus_evidence
-        elif logit2evidence == "relu":
-            self.logit2evidence = relu_evidence
+        elif logit2evidence == "softplus_sq":
+            self.logit2evidence = softplus_sq_evidence
         elif logit2evidence == "elu":
             self.logit2evidence = elu_evidence
+        elif logit2evidence == "elu_sq":
+            self.logit2evidence = elu_sq_evidence
+        elif logit2evidence == "relu":
+            self.logit2evidence = relu_evidence
         else:
             raise KeyError(logit2evidence)
         self.regularization = regularization

@@ -12,7 +12,10 @@ from mmcv.runner import get_dist_info
 import seaborn as sns; sns.set_theme()
 import matplotlib.pyplot as plt
 from mmcv.parallel import is_module_wrapper
-
+from mmcv.utils import print_log
+import time
+import json
+import pickle
 
 def avgfusion(alpha):
     ev = alpha - 1
@@ -20,9 +23,9 @@ def avgfusion(alpha):
     comb_alpha = comb_ev + 1
     s = comb_alpha.sum(1, keepdim=True)
     u = comb_alpha.size(1) / s
-    probs = comb_alpha / s
-    bel = comb_ev / s
-    return bel, u, probs
+    probs = comb_alpha / (s + 1e-9)
+    bel = comb_ev / (s + 1e-9)
+    return bel, u, comb_alpha, probs
 
 
 def wfusion(alpha):
@@ -33,9 +36,9 @@ def wfusion(alpha):
     comb_alpha = comb_ev + 1
     s = comb_alpha.sum(1, keepdim=True)
     u = comb_alpha.size(1) / s
-    probs = comb_alpha / s
-    bel = comb_ev / s
-    return bel, u, probs
+    probs = comb_alpha / (s + 1e-9)
+    bel = comb_ev / (s + 1e-9)
+    return bel, u, comb_alpha, probs
 
 
 def ccfusion(alpha, combinations):
@@ -102,15 +105,17 @@ def np2tmp(array, temp_file_name=None, tmpdir=None):
 
 def plot_mask(mask, file):
     plt.figure()
-    sns.heatmap(mask.squeeze(), xticklabels=False, yticklabels=False).get_figure().savefig(file)
+    sns.heatmap(mask,
+                xticklabels=False,
+                yticklabels=False, cmap='plasma').get_figure().savefig(file, dpi=300, bbox_inches='tight')
     plt.cla(); plt.clf(); plt.close('all')
 
 
 def plot_conf(conf, file):
     plt.figure()
     sns.heatmap(
-        conf.squeeze(),
-        xticklabels=False, yticklabels=False, cmap='Greys').get_figure().savefig(file)
+        conf,
+        xticklabels=False, yticklabels=False, cmap='plasma').get_figure().savefig(file, dpi=300, bbox_inches='tight')
     plt.cla(); plt.clf(); plt.close('all')
 
 
@@ -122,7 +127,9 @@ def single_gpu_test(model,
                     opacity=0.5,
                     pre_eval=False,
                     format_only=False,
-                    format_args={}):
+                    format_args={},
+                    fusion_method='af',
+                    work_dir="."):
     """Test with single GPU by progressive mode.
 
     Args:
@@ -189,22 +196,53 @@ def single_gpu_test(model,
     # data_fetcher -> collate_fn(dataset[index]) -> data_sample
     # we use batch_sampler to get correct data idx
     loader_indices = data_loader.batch_sampler
+    time_forward = []
+    ig_ood = []
+    ig_id = []
+    ug_id = []
+    ug_ood = []
+    init_u_ood_list = []
+    init_u_id_list = []
+    gen_evs_correct = []
+    gen_evs_wrong = []
+
+    print_log(f"\n# Parameters: {sum(p.numel() for p in torchmodel.parameters() if p.requires_grad)}")
+
+    print("Using averaging fusion") if fusion_method == 'af' else print("Using weighted fusion")
+    var_s = []
     for batch_indices, data in zip(loader_indices, data_loader):
         with torch.no_grad():
+            torch.cuda.synchronize()
+            t0 = time.time()
+            # torchmodel.decode_head.dropout.train()
             result, seg_logit = model(return_loss=False, **data)  # returns labels and logits
+            torch.cuda.synchronize()
+            t1 = time.time()
+        time_forward.append(t1 - t0)
 
         # # For testing dropout
         # result = []
         # seg_logit = []
+        # ts = []
         # for _ in range(20):
         #     with torch.no_grad():
+        #         torch.cuda.synchronize()
+        #         t0 = time.time()
         #         torchmodel.decode_head.dropout.train()
         #         result_i, seg_logit_i = model(return_loss=False, **data)
+        #         torch.cuda.synchronize()
+        #         t1 = time.time()
+        #     ts.append(t1-t0)
         #     result.append(result_i)
         #     seg_logit.append(seg_logit_i.detach())
+        # time_forward.append(np.mean(ts))
         # seg_logit = torch.cat(seg_logit, dim=0)
 
         n_samples = seg_logit.size(0)
+        if n_samples > 1:
+            assert fusion_method in ('af', 'wf')
+        else:
+            fusion_method = 'none'
         seg_logit = seg_logit.detach()
         seg_gt = dataset.get_gt_seg_map_by_idx_and_reduce_zero_label(batch_indices[0])
 
@@ -222,27 +260,29 @@ def single_gpu_test(model,
                 img_show = img[:h, :w, :]
 
                 ori_h, ori_w = img_meta['ori_shape'][:-1]
+
                 img_show = mmcv.imresize(img_show, (ori_w, ori_h))
+
                 if out_dir:
                     out_file = osp.join(out_dir, img_meta['ori_filename'])
                 else:
                     out_file = None
-                ignore_mask = (seg_gt == dataset.ignore_index).astype(np.uint8)
+                if dataset.reduce_zero_label:
+                    ignore_mask = (seg_gt == dataset.ignore_index).astype(np.bool)
+                else:
+                    ignore_mask = np.zeros_like(seg_gt).astype(np.bool)
+                # res_masked_bg = np.ma.array(res, mask=ignore_mask)
                 for idx, res in enumerate(result):
-                    if dataset.reduce_zero_label:
-                        res_masked_bg = np.ma.array(res, mask=ignore_mask)
-                    else:
-                        res_masked_bg = res
                     torchmodel.show_result(
                         img_show,
-                        [res_masked_bg],
+                        [np.ma.array(res, mask=ignore_mask)],
                         palette=dataset.PALETTE,
                         show=show,
                         out_file=out_file[:-4] + f"_{idx}" + out_file[-4:],
                         opacity=opacity)
                 torchmodel.show_result(
                     img_show,
-                    [seg_gt, ],
+                    [seg_gt],
                     palette=dataset.PALETTE,
                     show=show,
                     out_file=out_file[:-4] + "_gt" + out_file[-4:],
@@ -253,30 +293,93 @@ def single_gpu_test(model,
                         # EDL loss
                         num_cls = seg_logit.shape[1]
                         alpha = logit2alpha(seg_logit)
+                        strength = alpha.sum(dim=1, keepdim=True)
                         if n_samples > 1:
-                            # Evidence Averaging
-                            alpha_avg = alpha.mean(0, keepdim=True)
-                            probs = alpha_avg / alpha_avg.sum(dim=1, keepdim=True)
-                            u = num_cls / alpha_avg.sum(dim=1, keepdim=True)
-                            plot_conf(1 - u.cpu().numpy(), out_file[: -4] + "_edl_avgfusion_1_u" + out_file[-4:])
-                            plot_conf(probs.max(dim=1)[0].cpu().numpy(), out_file[: -4] + "_edl_avgfusion_conf" + out_file[-4:])
-                            # Evidence CCfusion
-                            bel_ccfusion, u_ccfusion, probs_ccfusion = ccfusion(alpha, torchmodel.decode_head.combinations)
-                            plot_conf(1 - u_ccfusion.cpu().numpy(), out_file[: -4] + "_edl_ccfusion_1_u" + out_file[-4:])
-                            plot_conf(bel_ccfusion.max(dim=1)[0].cpu().numpy(), out_file[: -4] + "_edl_ccfusion_bel" + out_file[-4:])
-                            plot_conf(probs_ccfusion.max(dim=1)[0].cpu().numpy(), out_file[: -4] + "_edl_ccfusion_conf" + out_file[-4:])
-                            # Plotting individual maps
-                            for i in range(n_samples):
-                                alpha_i = alpha[i, :, :, :].unsqueeze(0)
-                                probs_i = alpha_i / alpha_i.sum(dim=1, keepdim=True)
-                                u_i = num_cls / alpha_i.sum(dim=1, keepdim=True)
-                                plot_conf(1 - u_i.cpu().numpy(), out_file[: -4] + f"_edl_1_u_sample_{i}" + out_file[-4:])
-                                plot_conf(probs_i.max(dim=1)[0].cpu().numpy(), out_file[: -4] + f"_edl_conf_sample_{i}" + out_file[-4:])
+                            _, comb_u, comb_alpha, comb_probs = avgfusion(alpha)
+                            comb_strength = comb_alpha.sum(dim=1, keepdim=True)
+                            comb_dir_entropy = (torch.lgamma(comb_alpha).sum(1, keepdim=True) - torch.lgamma(comb_strength) -
+                                                (num_cls - comb_strength) * torch.digamma(comb_strength) -
+                                                ((comb_alpha - 1.0) * torch.digamma(comb_alpha)).sum(1, keepdim=True)).squeeze().cpu().numpy()
+                            normalized_comb_dir_entropy = comb_dir_entropy
+                            # normalized_comb_dir_entropy = (comb_dir_entropy - comb_dir_entropy.min()
+                            #                                ) / (comb_dir_entropy.max() - comb_dir_entropy.min()+1e-8)
+
+                            normalized_comb_u = (comb_u - comb_u.min()) / (comb_u.max() - comb_u.min())
+
+                            normalized_comb_u = normalized_comb_u.cpu().squeeze().numpy()
+                            normalized_comb_u[ignore_mask] = 0.
+
+                            plot_conf(normalized_comb_u, out_file[: -4] + "_edl_avgfusion_u" + out_file[-4:])
+                            normalized_comb_dir_entropy[ignore_mask] = normalized_comb_dir_entropy.min()
+                            plot_conf(normalized_comb_dir_entropy, out_file[: -4] + "_edl_avgfusion_dir_entropy" + out_file[-4:])
+                            comb_pred = comb_probs.max(1)[1].squeeze().cpu().numpy()  # predictions
+                            torchmodel.show_result(
+                                img_show,
+                                [np.ma.array(comb_pred, mask=ignore_mask)],
+                                palette=dataset.PALETTE,
+                                show=show,
+                                out_file=out_file[:-4] + "_avgfusion_pred_" + out_file[-4:],
+                                opacity=opacity)
+                            ##########################################################################################################################################
+                            _, comb_u, comb_alpha, comb_probs = wfusion(alpha)
+                            comb_strength = comb_alpha.sum(dim=1, keepdim=True)
+                            comb_dir_entropy = (torch.lgamma(comb_alpha).sum(1, keepdim=True) - torch.lgamma(comb_strength) -
+                                                (num_cls - comb_strength) * torch.digamma(comb_strength) -
+                                                ((comb_alpha - 1.0) * torch.digamma(comb_alpha)).sum(1, keepdim=True)).squeeze().cpu().numpy()
+                            normalized_comb_dir_entropy = comb_dir_entropy
+                            # normalized_comb_dir_entropy = (comb_dir_entropy - comb_dir_entropy.min()
+                            #                                ) / (comb_dir_entropy.max() - comb_dir_entropy.min()+1e-8)
+                            normalized_comb_u = (comb_u - comb_u.min()) / (comb_u.max() - comb_u.min())
+
+                            normalized_comb_u = normalized_comb_u.cpu().squeeze().numpy()
+                            normalized_comb_u[ignore_mask] = 0.
+                            plot_conf(normalized_comb_u, out_file[: -4] + "_edl_wfusion_u" + out_file[-4:])
+                            # import ipdb; ipdb.set_trace()
+                            normalized_comb_dir_entropy[ignore_mask] = normalized_comb_dir_entropy.min()
+                            plot_conf(normalized_comb_dir_entropy, out_file[: -4] + "_edl_wfusion_dir_entropy" + out_file[-4:])
+
+                            comb_pred = comb_probs.max(1)[1].squeeze().cpu().numpy()  # predictions
+                            torchmodel.show_result(
+                                img_show,
+                                [np.ma.array(comb_pred, mask=ignore_mask)],
+                                palette=dataset.PALETTE,
+                                show=show,
+                                out_file=out_file[:-4] + "_wfusion_pred_" + out_file[-4:],
+                                opacity=opacity)
+                            # # Evidence Averaging
+                            # alpha_avg = comb_alpha.mean(0, keepdim=True)
+                            # probs = alpha_avg / alpha_avg.sum(dim=1, keepdim=True)
+                            # u = num_cls / alpha_avg.sum(dim=1, keepdim=True)
+                            # plot_conf(1 - u.cpu().numpy(), out_file[: -4] + "_edl_avgfusion_1_u" + out_file[-4:])
+                            # plot_conf(probs.max(dim=1)[0].cpu().numpy(), out_file[: -4] + "_edl_avgfusion_conf" + out_file[-4:])
+                            # # Evidence CCfusion
+                            # bel_ccfusion, u_ccfusion, probs_ccfusion = ccfusion(comb_alpha, torchmodel.decode_head.combinations)
+                            # plot_conf(1 - u_ccfusion.cpu().numpy(), out_file[: -4] + "_edl_ccfusion_1_u" + out_file[-4:])
+                            # plot_conf(bel_ccfusion.max(dim=1)[0].cpu().numpy(), out_file[: -4] + "_edl_ccfusion_bel" + out_file[-4:])
+                            # plot_conf(probs_ccfusion.max(dim=1)[0].cpu().numpy(), out_file[: -4] + "_edl_ccfusion_conf" + out_file[-4:])
+                            # # Plotting individual maps
+                            # for i in range(n_samples):
+                            #     alpha_i = comb_alpha[i, :, :, :].unsqueeze(0)
+                            #     probs_i = alpha_i / alpha_i.sum(dim=1, keepdim=True)
+                            #     u_i = num_cls / alpha_i.sum(dim=1, keepdim=True)
+                            #     plot_conf(1 - u_i.cpu().numpy(), out_file[: -4] + f"_edl_1_u_sample_{i}" + out_file[-4:])
+                            #     plot_conf(probs_i.max(dim=1)[0].cpu().numpy(), out_file[: -4] + f"_edl_conf_sample_{i}" + out_file[-4:])
                         else:
-                            probs = alpha / alpha.sum(dim=1, keepdim=True)
-                            u = num_cls / alpha.sum(dim=1, keepdim=True)
-                            plot_conf(1 - u.cpu().numpy(), out_file[: -4] + "_edl_u" + out_file[-4:])
-                            plot_conf(probs.max(dim=1)[0].cpu().numpy(), out_file[: -4] + "_edl_conf" + out_file[-4:])
+                            # probs = alpha / alpha.sum(dim=1, keepdim=True)
+                            dir_entropy = (torch.lgamma(alpha).sum(1, keepdim=True) - torch.lgamma(strength) -
+                                           (num_cls - strength) * torch.digamma(strength) -
+                                           ((alpha - 1.0) * torch.digamma(alpha)).sum(1, keepdim=True)).squeeze().cpu().numpy()
+                            u = (num_cls / alpha.sum(dim=1, keepdim=True)).squeeze().cpu().numpy()
+                            normalized_u = (u - u.min()) / (u.max() - u.min() + 1e-8)
+                            normalized_u[ignore_mask] = 0.
+
+                            # normalized_dir_entropy = (dir_entropy - dir_entropy.min()) - (dir_entropy.max() - dir_entropy.min() + 1e-8)
+                            normalized_dir_entropy = dir_entropy
+                            normalized_dir_entropy[ignore_mask] = normalized_dir_entropy.min()
+
+                            plot_conf(normalized_u, out_file[: -4] + "_edl_u" + out_file[-4:])
+                            plot_conf(normalized_dir_entropy, out_file[: -4] + "_edl_dir_entropy" + out_file[-4:])
+                            # plot_conf(probs.max(dim=1)[0].cpu().numpy(), out_file[: -4] + "_edl_conf" + out_file[-4:])
                     else:
                         # Softmax crossentropy loss
                         probs = logit2prob(seg_logit)
@@ -289,7 +392,17 @@ def single_gpu_test(model,
                             for i in range(n_samples):
                                 plot_conf(probs[i, :, :, :].max(dim=0)[0].cpu().numpy(), out_file[: -4] + f"_sm_conf_sample_{i}" + out_file[-4:])
                         else:
-                            plot_conf(probs[0, :, :, :].max(dim=0)[0].cpu().numpy(), out_file[: -4] + f"_sm_conf_sample_{i}" + out_file[-4:])
+                            max_logit = seg_logit.max(dim=1)[0].squeeze().cpu().numpy()
+                            # normalized_max_logit = (max_logit - max_logit.min()) / (max_logit.max() - max_logit.min() + 1e-8)
+                            normalized_max_logit = max_logit
+                            normalized_max_logit[ignore_mask] = max_logit.max()
+                            plot_conf(- normalized_max_logit, out_file[: -4] + f"_ml_conf" + out_file[-4:])
+
+                            probs = probs.max(dim=1)[0].squeeze().cpu().numpy()
+                            normalized_probs = (probs - probs.min()) / (probs.max() - probs.min() + 1e-8)
+
+                            normalized_probs[ignore_mask] = normalized_probs.max()
+                            plot_conf(1 - normalized_probs, out_file[: -4] + f"_sm_conf_sample" + out_file[-4:])
                 else:
                     raise NotImplementedError
                 # Mask for edges between separate labels
@@ -303,26 +416,48 @@ def single_gpu_test(model,
 
         if format_only:
             result = dataset.format_results(result, indices=batch_indices, **format_args)
-
+        # import ipdb; ipdb.set_trace()
         if pre_eval:
             # TODO: adapt samples_per_gpu > 1.
             # only samples_per_gpu=1 valid now
             # For originally included metrics mIOU
             if torchmodel.decode_head.loss_decode.loss_name.startswith("loss_edl") and n_samples > 1:
-                _, _, probs_f = avgfusion(logit2alpha(seg_logit))
-                # _, _, probs_f = wfusion(logit2alpha(seg_logit))
-                result = [probs_f.max(1)[1].squeeze().cpu().numpy()] # predictions
+                if fusion_method == 'af':
+                    _, _, _, probs_f = avgfusion(logit2alpha(seg_logit))
+                else:
+                    _, _, _, probs_f = wfusion(logit2alpha(seg_logit))
+                
+                # with open(osp.join(work_dir,f"example_{batch_indices[0]}.pkl"), 'wb') as f:
+                #     pickle.dump(logit2alpha(seg_logit).squeeze().cpu().numpy().var(0).mean(), f)
+                p = logit2alpha(seg_logit)/logit2alpha(seg_logit).sum(1, keepdim=True)
+                var_s.append(p.squeeze().cpu().numpy().var(0, keepdims=True))
+                result = [probs_f.max(1)[1].squeeze().cpu().numpy()]  # predictions
             result_seg = dataset.pre_eval(result, indices=batch_indices)[0]
             # For added metrics OOD, calibration
             if not torchmodel.decode_head.use_bags:
                 if torchmodel.decode_head.loss_decode.loss_name.startswith("loss_edl"):
                     # For EDL probs
                     if n_samples > 1:
-                        result_oth = dataset.pre_eval_custom_many_samples(seg_logit, seg_gt, "edl", logit_fn=logit2alpha, fusion_fn=avgfusion)
-                        # result_oth = dataset.pre_eval_custom_many_samples(seg_logit, seg_gt, "edl", logit_fn=logit2alpha, fusion_fn=wfusion)
+                        if fusion_method == 'af':
+                            result_ig, result_oth = dataset.pre_eval_custom_many_samples(
+                                seg_logit, seg_gt, "edl", logit_fn=logit2alpha, fusion_fn=avgfusion)
+                        else:
+                            result_ig, result_oth = dataset.pre_eval_custom_many_samples(
+                                seg_logit, seg_gt, "edl", logit_fn=logit2alpha, fusion_fn=wfusion)
+                        result_ig_ood, result_ig_id, result_u_gain_ood, result_u_gain_id, init_u_ood, init_u_id = result_ig
+                        # import ipdb; ipdb.set_trace()
+                        ug_ood.append(result_u_gain_ood)
+                        ug_id.append(result_u_gain_id)
+                        ig_ood.append(result_ig_ood)
+                        ig_id.append(result_ig_id)
+                        init_u_ood_list.append(init_u_ood)
+                        init_u_id_list.append(init_u_id)
 
                     else:
-                        result_oth = dataset.pre_eval_custom_single_sample(seg_logit, seg_gt, "edl", logit_fn=logit2alpha)
+                        gen_ev, result_oth = dataset.pre_eval_custom_single_sample(seg_logit, seg_gt, "edl", logit_fn=logit2alpha)
+                        gen_ev_correct, gen_ev_wrong = gen_ev
+                        gen_evs_correct.append(gen_ev_correct)
+                        gen_evs_wrong.append(gen_ev_wrong)
                 else:
                     # For softmax probs
                     if n_samples > 1:
@@ -341,6 +476,50 @@ def single_gpu_test(model,
         batch_size = 1
         for _ in range(batch_size):
             prog_bar.update()
+    import ipdb; ipdb.set_trace()
+    avg_initial_u_id = sum([x.sum() for x in init_u_id_list]) / (1e-8 + sum([x.size for x in init_u_id_list]))
+    avg_initial_u_ood = sum([x.sum() for x in init_u_ood_list]) / (1e-8 + sum([x.size for x in init_u_ood_list]))
+
+    u_gain_id_mean = sum([x.sum() for x in ug_id]) / (1e-8 + sum([x.size for x in ug_id]))
+    u_gain_ood_mean = sum([x.sum() for x in ug_ood]) / (1e-8 + sum([x.size for x in ug_ood]))
+    u_gain_mean = (sum([x.sum() for x in ug_ood]) + sum([x.sum() for x in ug_id])
+                   ) / (1e-8 + sum([x.size for x in ug_id]) + sum([x.size for x in ug_ood]))
+    information_gain_id_mean = sum([x.sum() for x in ig_id]) / (1e-8 + sum([x.size for x in ig_id]))
+    information_gain_ood_mean = sum([x.sum() for x in ig_ood]) / (1e-8 + sum([x.size for x in ig_ood]))
+    information_gain_mean = (sum([x.sum() for x in ig_ood]) + sum([x.sum() for x in ig_id])
+                             ) / (1e-8 + sum([x.size for x in ig_id]) + sum([x.size for x in ig_ood]))
+    run_time_mean = np.mean(time_forward)
+    run_time_std = np.std(time_forward)
+
+    print_log(f"\nAvg Time: {run_time_mean:.4f} +/- {run_time_std:.4f}")
+
+    print_log(f"\nvacuity variance (ood): {u_gain_ood_mean:.4f}")
+    print_log(f"\nvacuity variance (id): {u_gain_id_mean:.4f}")
+    print_log(f"\nvacuity variance: {u_gain_mean:.4f}")
+    print_log(f"\ninformation gain (ood): {information_gain_ood_mean:.4f}")
+    print_log(f"\ninformation gain (id): {information_gain_id_mean:.4f}")
+    print_log(f"\ninformation gain: {information_gain_mean:.4f}")
+    if len(gen_evs_wrong) != 0:
+        print_log(f"\nMean evidences generated for the wrong class: {np.concatenate(gen_evs_wrong).mean():.4f}", )
+        print_log(f"\nMean evidences generated for the correct class: {np.concatenate(gen_evs_correct).mean():.4f}", )
+
+    d = {
+        "avg_runtime": float(run_time_mean),
+        "std_runtime": float(run_time_std),
+        "avg_initial_u_id": float(avg_initial_u_id),
+        "avg_initial_u_ood": float(avg_initial_u_ood),
+        "avg_u_gain_id": float(u_gain_id_mean),
+        "avg_u_gain_ood": float(u_gain_ood_mean),
+        "avg_u_gain": float(u_gain_mean),
+        "information gain": float(information_gain_mean),
+        "information gain (ood)": float(information_gain_ood_mean),
+        "information gain (id)": float(information_gain_id_mean),
+    }
+    with open(osp.join(work_dir, f"meta_results{'_'+fusion_method}.json"), 'w') as f:
+        json.dump(d, f)
+    # ugain = sum([x.sum() for x in ug]) / (1e-8+sum([x.size for x in ug]))
+    # print_log(f"\nvacuity gain: {ugain:.4f}" )
+    # return information_gain_mean, run_time_mean, run_time_std, results
     return results
 
 
