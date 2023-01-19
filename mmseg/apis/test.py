@@ -16,6 +16,8 @@ from mmcv.utils import print_log
 import time
 import json
 import pickle
+from pathlib import Path
+
 
 def avgfusion(alpha):
     ev = alpha - 1
@@ -39,6 +41,27 @@ def wfusion(alpha):
     probs = comb_alpha / (s + 1e-9)
     bel = comb_ev / (s + 1e-9)
     return bel, u, comb_alpha, probs
+
+# For ensembles
+# ENS_RA = ["deeplabv3_r50-d8_720x720_70e_cityscapes_20221228113444_lr=0.01_bs=8",
+#           "deeplabv3_r50-d8_720x720_70e_cityscapes_20221010232119_lr=0.01_bs=8",
+#           "deeplabv3_r50-d8_720x720_70e_cityscapes_20221215141106_lr=0.01_bs=8",
+#           "deeplabv3_r50-d8_720x720_70e_cityscapes_20221221193330_lr=0.01_bs=8",
+#           "deeplabv3_r50-d8_720x720_70e_cityscapes_20221222231346_lr=0.01_bs=8",
+#           "deeplabv3_r50-d8_720x720_70e_cityscapes_20221224114407_lr=0.01_bs=8",
+#           "deeplabv3_r50-d8_720x720_70e_cityscapes_20221227120548_lr=0.01_bs=8",
+#           "deeplabv3_r50-d8_720x720_70e_cityscapes_20221216101348_lr=0.01_bs=8"]
+
+# ENS_SH = [
+#     "deeplabv3_r50-d8_512x512_70e_street_hazards_20221228113444_lr=0.01_bs=4",
+#     "deeplabv3_r50-d8_512x512_70e_street_hazards_20220821215145_lr=0.01_bs=4",
+#     "deeplabv3_r50-d8_512x512_70e_street_hazards_20221215101946_lr=0.01_bs=4",
+#     "deeplabv3_r50-d8_512x512_70e_street_hazards_20221221193035_lr=0.01_bs=4",
+#     "deeplabv3_r50-d8_512x512_70e_street_hazards_20221223114052_lr=0.01_bs=4",
+#     "deeplabv3_r50-d8_512x512_70e_street_hazards_20221224121854_lr=0.01_bs=4",
+#     "deeplabv3_r50-d8_512x512_70e_street_hazards_20221227120548_lr=0.01_bs=4",
+#     "deeplabv3_r50-d8_512x512_70e_street_hazards_20221229104628_lr=0.01_bs=4"
+# ]
 
 
 def ccfusion(alpha, combinations):
@@ -244,8 +267,25 @@ def single_gpu_test(model,
         else:
             fusion_method = 'none'
         seg_logit = seg_logit.detach()
-        seg_gt = dataset.get_gt_seg_map_by_idx_and_reduce_zero_label(batch_indices[0])
 
+        # pre_eval = False
+        # fname = data['img_metas'][0].data[0][0]['ori_filename'][:-4] + '_logits.pkl'
+        # Path(osp.join(work_dir, 'ensemble_pred')).mkdir(exist_ok=True)
+        # Path(osp.join(work_dir, 'ensemble_pred', osp.dirname(fname))).mkdir(exist_ok=True)
+        # with open(osp.join(work_dir, 'ensemble_pred', fname), 'wb') as f:
+        #     pickle.dump(seg_logit.cpu(), f)
+
+        # pred_logit_list = []
+        # for m in ENS_SH:
+        #     wd = osp.join('work_dirs', m)
+        #     fname = data['img_metas'][0].data[0][0]['ori_filename'][:-4] + '_logits.pkl'
+        #     with open(osp.join(wd, 'ensemble_pred', fname), 'rb') as f:
+        #         pred_logit_list.append(pickle.load(f).to(seg_logit.device))
+        # seg_logit = torch.cat(pred_logit_list, dim=0)
+        # n_samples = seg_logit.size(0)
+        # import ipdb; ipdb.set_trace()
+        # print_log('\nCurrent Image: ' + data['img_metas'][0].data[0][0]['ori_filename'])
+        seg_gt = dataset.get_gt_seg_map_by_idx_and_reduce_zero_label(batch_indices[0])
         if (show or out_dir):
             # produce 3 images
             # gt_seg_map, pred_seg_map, confidence_map
@@ -406,7 +446,7 @@ def single_gpu_test(model,
                 else:
                     raise NotImplementedError
                 # Mask for edges between separate labels
-                plot_mask(dataset.edge_detector(seg_gt).cpu().numpy(), out_file[: -4] + "_edge_mask" + out_file[-4:])
+                # plot_mask(dataset.edge_detector(seg_gt).cpu().numpy(), out_file[: -4] + "_edge_mask" + out_file[-4:])
                 # Mask of ood samples
                 if hasattr(dataset, "ood_indices"):
                     plot_mask((seg_gt == dataset.ood_indices[0]).astype(np.uint8), out_file[:-4] + "_ood_mask" + out_file[-4:])
@@ -426,33 +466,33 @@ def single_gpu_test(model,
                     _, _, _, probs_f = avgfusion(logit2alpha(seg_logit))
                 else:
                     _, _, _, probs_f = wfusion(logit2alpha(seg_logit))
-                
                 # with open(osp.join(work_dir,f"example_{batch_indices[0]}.pkl"), 'wb') as f:
                 #     pickle.dump(logit2alpha(seg_logit).squeeze().cpu().numpy().var(0).mean(), f)
-                p = logit2alpha(seg_logit)/logit2alpha(seg_logit).sum(1, keepdim=True)
+                p = logit2alpha(seg_logit) / logit2alpha(seg_logit).sum(1, keepdim=True)
                 var_s.append(p.squeeze().cpu().numpy().var(0, keepdims=True))
                 result = [probs_f.max(1)[1].squeeze().cpu().numpy()]  # predictions
             result_seg = dataset.pre_eval(result, indices=batch_indices)[0]
             # For added metrics OOD, calibration
+
             if not torchmodel.decode_head.use_bags:
                 if torchmodel.decode_head.loss_decode.loss_name.startswith("loss_edl"):
                     # For EDL probs
                     if n_samples > 1:
                         if fusion_method == 'af':
-                            result_ig, result_oth = dataset.pre_eval_custom_many_samples(
+                            result_oth = dataset.pre_eval_custom_many_samples(
                                 seg_logit, seg_gt, "edl", logit_fn=logit2alpha, fusion_fn=avgfusion)
                         else:
-                            result_ig, result_oth = dataset.pre_eval_custom_many_samples(
+                            result_oth = dataset.pre_eval_custom_many_samples(
                                 seg_logit, seg_gt, "edl", logit_fn=logit2alpha, fusion_fn=wfusion)
-                        result_ig_ood, result_ig_id, result_u_gain_ood, result_u_gain_id, init_u_ood, init_u_id = result_ig
+                        # result_ig_ood, result_ig_id, result_u_gain_ood, result_u_gain_id, init_u_ood, init_u_id = result_ig
+                        # # import ipdb; ipdb.set_trace()
+                        # ug_ood.append(result_u_gain_ood)
+                        # ug_id.append(result_u_gain_id)
+                        # ig_ood.append(result_ig_ood)
+                        # ig_id.append(result_ig_id)
+                        # init_u_ood_list.append(init_u_ood)
+                        # init_u_id_list.append(init_u_id)
                         # import ipdb; ipdb.set_trace()
-                        ug_ood.append(result_u_gain_ood)
-                        ug_id.append(result_u_gain_id)
-                        ig_ood.append(result_ig_ood)
-                        ig_id.append(result_ig_id)
-                        init_u_ood_list.append(init_u_ood)
-                        init_u_id_list.append(init_u_id)
-
                     else:
                         gen_ev, result_oth = dataset.pre_eval_custom_single_sample(seg_logit, seg_gt, "edl", logit_fn=logit2alpha)
                         gen_ev_correct, gen_ev_wrong = gen_ev
@@ -463,8 +503,9 @@ def single_gpu_test(model,
                     if n_samples > 1:
                         def logit_fn(x): return logit2prob(x).mean(0, keepdim=True)
                         result_oth = dataset.pre_eval_custom_many_samples(seg_logit, seg_gt, "softmax", logit_fn=logit_fn)
+
                     else:
-                        result_oth = dataset.pre_eval_custom_single_sample(seg_logit, seg_gt, "softmax", logit_fn=logit2prob)
+                        gen_ev, result_oth = dataset.pre_eval_custom_single_sample(seg_logit, seg_gt, "softmax", logit_fn=logit2prob)
             else:
                 raise NotImplementedError
             result = [(result_seg, result_oth)]
@@ -476,7 +517,7 @@ def single_gpu_test(model,
         batch_size = 1
         for _ in range(batch_size):
             prog_bar.update()
-    import ipdb; ipdb.set_trace()
+
     avg_initial_u_id = sum([x.sum() for x in init_u_id_list]) / (1e-8 + sum([x.size for x in init_u_id_list]))
     avg_initial_u_ood = sum([x.sum() for x in init_u_ood_list]) / (1e-8 + sum([x.size for x in init_u_ood_list]))
 

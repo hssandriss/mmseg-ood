@@ -243,8 +243,8 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         if self.vi_use_lower_dim:
             z = self.density_estimation_to_params(z)
             assert z.size(-1) == self.conv_seg_params_numel
-            print("Variance of theta >>>>>", z.var(0).mean())
-        import ipdb; ipdb.set_trace()
+        #     print("Variance of theta >>>>>", z.var(0).mean())
+        # import ipdb; ipdb.set_trace()
         # import ipdb; ipdb.set_trace()
         # joblib.dump(z.cpu().numpy(), 'proj_w_2xnaf_sig+1xfc.pkl')
         # import ipdb; ipdb.set_trace()
