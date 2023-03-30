@@ -8,7 +8,7 @@ from mmseg.ops import resize
 from .. import builder
 from ..builder import SEGMENTORS
 from .base import BaseSegmentor
-
+from ..backbones import VisionTransformer
 
 @SEGMENTORS.register_module()
 class EncoderDecoder(BaseSegmentor):
@@ -327,8 +327,13 @@ class EncoderDecoder(BaseSegmentor):
         return seg_pred
 
     def freeze_encoder(self):
-        self.backbone.frozen_stages = self.backbone.num_stages
-        self.backbone._freeze_stages()
+        if hasattr(self.backbone, "num_stages") and hasattr(self.backbone, "_freeze_stages"):
+            self.backbone.frozen_stages = self.backbone.num_stages
+            self.backbone._freeze_stages()
+        elif isinstance(self.backbone, VisionTransformer):
+            self.backbone.train(False)
+        else:
+            raise NotImplementedError
 
     def freeze_feature_extractor(self):
         to_eval(self, 'EncoderDecoder')

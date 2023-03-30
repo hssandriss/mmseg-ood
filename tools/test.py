@@ -449,9 +449,9 @@ def main():
                                  'u.auroc',
                                  'u.aupr',
                                  'u.fpr95',
-                                 'disonnance.auroc',
-                                 'disonnance.aupr',
-                                 'disonnance.fpr95',
+                                 'dissonance.auroc',
+                                 'dissonance.aupr',
+                                 'dissonance.fpr95',
                                  'dir_entropy.auroc',
                                  'dir_entropy.aupr',
                                  'dir_entropy.fpr95'
@@ -485,7 +485,7 @@ def main():
             f"{reg_ood_summary.loc[i, 'emp_entropy.auroc']*100}&{reg_ood_summary.loc[i, 'emp_entropy.aupr']*100}&{reg_ood_summary.loc[i, 'emp_entropy.fpr95']*100}")
         print(f"{sl_ood_summary.loc[i, 'u.auroc']*100}&{sl_ood_summary.loc[i, 'u.aupr']*100}&{sl_ood_summary.loc[i, 'u.fpr95']*100}")
         print(
-            f"{sl_ood_summary.loc[i, 'disonnance.auroc']*100}&{sl_ood_summary.loc[i, 'disonnance.aupr']*100}&{sl_ood_summary.loc[i, 'disonnance.fpr95']*100}")
+            f"{sl_ood_summary.loc[i, 'dissonance.auroc']*100}&{sl_ood_summary.loc[i, 'dissonance.aupr']*100}&{sl_ood_summary.loc[i, 'dissonance.fpr95']*100}")
 
         # print(
         #     f"{reg_ood_summary.loc[i, 'max_prob.auroc']}/{reg_ood_summary.loc[i, 'max_logit.auroc']}/{reg_ood_summary.loc[i, 'emp_entropy.auroc']}/{sl_ood_summary.loc[i, 'u.auroc']}/{sl_ood_summary.loc[i, 'disonnance.auroc']}"

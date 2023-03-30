@@ -7,7 +7,8 @@ from mmseg.ops import resize
 from ..builder import HEADS
 from .decode_head import BaseDecodeHead
 from .bll_decode_head import BllBaseDecodeHead
-import joblib
+import torch.nn.functional as F
+
 
 class ASPPModule(nn.ModuleList):
     """Atrous Spatial Pyramid Pooling (ASPP) Module.
@@ -165,6 +166,12 @@ class ASPPBllHead(BllBaseDecodeHead):
             conv_cfg=self.conv_cfg,
             norm_cfg=self.norm_cfg,
             act_cfg=self.act_cfg)
+        
+        self.w_shape, self.b_shape = self.conv_seg.weight.shape, self.conv_seg.bias.shape
+        self.w_numel, self.b_numel = self.conv_seg.weight.numel(), self.conv_seg.bias.numel()
+        self.ll_param_numel = self.w_numel + self.b_numel
+        self.density_estimation_to_params = nn.Linear(self.vi_latent_dim, self.ll_param_numel, bias=False)
+        self.build_density_estimator()
 
     def _forward_feature(self, inputs):
         """Forward function for feature maps before classifying each pixel with
@@ -221,7 +228,7 @@ class ASPPBllHead(BllBaseDecodeHead):
             zk, sum_log_jacobians = self.density_estimation.forward_flow(z0, low_feats)
             # joblib.dump(zk.detach().cpu().numpy(), 'naf_samples.pkl')
             # print("Variance of z >>>>>", zk.var(0).mean())
-            
+
             output = self.cls_seg_x(output, zk)
             # Reverse KLD: https://arxiv.org/abs/1912.02762 page 7 Eq. 17-18
             # kl = - sum_log_jacobians.mean()
@@ -258,13 +265,46 @@ class ASPPBllHead(BllBaseDecodeHead):
             return output, kl
         elif nsamples > 1 and self.density_type in ('full_normal', 'fact_normal'):
             L = self.density_estimation._L
-            # z0 = self.density_estimation.sample_base(nsamples)
-            z0 = torch.as_tensor(joblib.load('base_samples.pkl')).to(output.device)
+            z0 = self.density_estimation.sample_base(nsamples)
+            # z0 = torch.as_tensor(joblib.load('base_samples.pkl')).to(output.device)
             zk = self.density_estimation.forward_normal(z0, L)
-            joblib.dump(zk.detach().cpu().numpy(), 'full_normal_samples.pkl')
-            print("Variance of z >>>>>", zk.var(0).mean())
+            # joblib.dump(zk.detach().cpu().numpy(), 'full_normal_samples.pkl')
+            # print("Variance of z >>>>>", zk.var(0).mean())
             kl = self.density_estimation.normal_kl_loss(L)
             output = self.cls_seg_x(output, zk)
             return output, kl
         else:
             raise NotImplementedError
+
+    def conv_seg_forward_x(self, x, z):
+        if self.vi_use_lower_dim:
+            z = self.density_estimation_to_params(z)
+            assert z.size(-1) == self.ll_param_numel
+        z_list = torch.split(z, 1, 0)
+        output = []
+        # if not self.dropout.training:
+        #     self.dropout.train()
+        for z_ in z_list:
+            dropout_x = self.dropout(x)
+            # dropout_x = x
+            z_ = z_.squeeze()
+            output.append(F.conv2d(input=dropout_x, weight=z_[:self.w_numel].reshape(self.w_shape), bias=z_[-self.b_numel:].reshape(self.b_shape)))
+        # import ipdb; ipdb.set_trace()
+        return torch.cat(output, dim=0)
+
+    def conv_seg_forward(self, x, z):
+        if self.vi_use_lower_dim:
+            z = self.density_estimation_to_params(z)
+            assert z.size(-1) == self.ll_param_numel
+        assert x.size(0) == z.size(0)
+        z_list = torch.split(z, 1, 0)
+        x_list = torch.split(x, 1, 0)
+        output = []
+        if not self.dropout.training:
+            self.dropout.train()
+        for x_, z_ in zip(x_list, z_list):
+            dropout_x = self.dropout(x_)
+            z_ = z_.squeeze()
+            output.append(F.conv2d(input=dropout_x, weight=z_[:self.w_numel].reshape(self.w_shape), bias=z_[-self.b_numel:].reshape(self.b_shape)))
+        assert len(output) == z.size(0)
+        return torch.cat(output, dim=0)

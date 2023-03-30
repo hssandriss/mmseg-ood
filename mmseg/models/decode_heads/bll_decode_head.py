@@ -18,17 +18,11 @@ from pyro.distributions.transforms import Sylvester, Radial, Planar, Householder
 from pyro.distributions.torch_transform import TransformModule
 from pyro.distributions.conditional import ConditionalTransformModule
 import math
-import itertools
-import joblib
 import numpy as np
 
 
 class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
     """Base class for NFBLLBaseDecodeHead.
-    TODO: Implementation ideas:
-    [*] Use block normal distribution.
-    [*] Use BlockNAF on full param dim.
-    [*] Allow free movement of the rest of the parameters using a small lr 1e-5.
     Args:
         in_channels (int|Sequence[int]): Input channels.
         channels (int): Channels after modules, before conv_seg.
@@ -94,7 +88,7 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
                  use_bn_flow=False,
                  vi_nsamples_train=10,
                  vi_nsamples_test=1,
-                 vi_use_lower_dim=False,
+                 vi_use_lower_dim=True,
                  vi_latent_dim=1024,
                  initialize_at_w_map=True):
         super(BllBaseDecodeHead, self).__init__(init_cfg)
@@ -156,29 +150,30 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         else:
             self.dropout = None
         self.fp16_enabled = False
+
         # Parameters for building NF
-        self.conv_seg_params_numel = self.conv_seg.weight.numel() + self.conv_seg.bias.numel()  # 9747
         self.vi_use_lower_dim = vi_use_lower_dim
-        if not self.vi_use_lower_dim:
-            self.latent_dim = self.conv_seg_params_numel
-        else:
-            assert isinstance(vi_latent_dim, int), "When using lower dim in density, you need to specify 'vi_latent_dim'"
-            self.latent_dim = vi_latent_dim
-            # self.density_estimation_to_params = nn.Linear(self.latent_dim, self.conv_seg_params_numel)
-            self.density_estimation_to_params = nn.Linear(self.latent_dim, self.conv_seg_params_numel, bias=False)
-
-            # self.density_estimation_to_params = nn.Sequential(
-            #     nn.Linear(self.latent_dim, self.conv_seg_params_numel // 2, bias=False),
-            #     # nn.ReLU(),
-            #     nn.Linear(self.conv_seg_params_numel // 2, self.conv_seg_params_numel, bias=False)
-            # )
-
+        self.vi_latent_dim = vi_latent_dim
         self.density_type = density_type
         self.flow_type = flow_type
         self.kl_weight = kl_weight
         self.flow_length = flow_length
         self.vi_nsamples_train = vi_nsamples_train
         self.vi_nsamples_test = vi_nsamples_test
+    
+        # Tracking KL of VI
+        self.kl_vals = []
+        self.kl_weights = []
+        self.epoch_num = 0
+        self.total_epochs = 70
+        
+    def build_density_estimator(self):
+        if not self.vi_use_lower_dim:
+            self.latent_dim = self.ll_param_numel
+        else:
+            assert isinstance(self.vi_latent_dim, int), "When using lower dim in density, you need to specify 'vi_latent_dim'"
+            self.latent_dim = self.vi_latent_dim
+        
         if self.density_type == 'flow':
             if self.flow_type in ('householder_flow', 'planar_flow', 'radial_flow', 'sylvester_flow', 'naf_flow', 'bnaf_flow', "polynomial_flow"):
                 self.density_estimation = DensityEstimation(
@@ -205,20 +200,7 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
                 self.density_type)
         else:
             raise NotImplementedError
-        self.w_shape, self.b_shape = self.conv_seg.weight.shape, self.conv_seg.bias.shape
-        self.w_numel, self.b_numel = self.conv_seg.weight.numel(), self.conv_seg.bias.numel()
-
-        # Tracking KL of VI
-        self.kl_vals = []
-        self.kl_weights = []
-        self.epoch_num = 0
-        self.total_epochs = 70
-        if isinstance(self.loss_decode, EDLLoss):
-            # For computing combinaisons (used for ccfusion)
-            self.combinations = []
-            # self.combinations = list(itertools.combinations_with_replacement(range(self.num_classes), r=self.vi_nsamples_test))
-        # del self.conv_seg
-        
+    
     def update_z0_params(self):
         """
         To run after loading weights
@@ -235,48 +217,6 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
             self.density_estimation.mu.data = initial_z.data
         else:
             raise NotImplementedError
-
-    def conv_seg_forward_x(self, x, z):
-        # outputs bs = x.size(0)*z.size(0)
-        # z = F.interpolate(z.unsqueeze(1), size=self.conv_seg_params_numel, mode='linear').squeeze() # doesn't work
-        # assert z.size(-1) == self.conv_seg_params_numel
-        if self.vi_use_lower_dim:
-            z = self.density_estimation_to_params(z)
-            assert z.size(-1) == self.conv_seg_params_numel
-        #     print("Variance of theta >>>>>", z.var(0).mean())
-        # import ipdb; ipdb.set_trace()
-        # import ipdb; ipdb.set_trace()
-        # joblib.dump(z.cpu().numpy(), 'proj_w_2xnaf_sig+1xfc.pkl')
-        # import ipdb; ipdb.set_trace()
-        z_list = torch.split(z, 1, 0)
-        output = []
-        # if not self.dropout.training:
-        #     self.dropout.train()
-        for z_ in z_list:
-            dropout_x = self.dropout(x)
-            # dropout_x = x
-            z_ = z_.squeeze()
-            output.append(F.conv2d(input=dropout_x, weight=z_[:self.w_numel].reshape(self.w_shape), bias=z_[-self.b_numel:].reshape(self.b_shape)))
-        # import ipdb; ipdb.set_trace()
-        return torch.cat(output, dim=0)
-
-    def conv_seg_forward(self, x, z):
-        # outputs bs = x.size(0)
-        if self.vi_use_lower_dim:
-            z = self.density_estimation_to_params(z)
-            assert z.size(-1) == self.conv_seg_params_numel
-        assert x.size(0) == z.size(0)
-        z_list = torch.split(z, 1, 0)
-        x_list = torch.split(x, 1, 0)
-        output = []
-        if not self.dropout.training:
-            self.dropout.train()
-        for x_, z_ in zip(x_list, z_list):
-            dropout_x = self.dropout(x_)
-            z_ = z_.squeeze()
-            output.append(F.conv2d(input=dropout_x, weight=z_[:self.w_numel].reshape(self.w_shape), bias=z_[-self.b_numel:].reshape(self.b_shape)))
-        assert len(output) == z.size(0)
-        return torch.cat(output, dim=0)
 
     def extra_repr(self):
         """Extra repr."""
@@ -398,7 +338,6 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         """Classify each pixel."""
         if self.dropout is not None:
             feat = self.dropout(feat)
-            # Here I can add weight normalization
         output = self.conv_seg_forward(feat, z)
         return output
 
@@ -406,7 +345,6 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         """Classify each pixel."""
         if self.dropout is not None:
             feat = self.dropout(feat)
-            # Here I can add weight normalization
         output = self.conv_seg_forward_x(feat, z)
         return output
 
@@ -487,40 +425,25 @@ class DensityEstimation(nn.Module):
                 transforms = [Planar(input_dim=self.dim) for _ in range(self.flow_length)]
             elif self.flow_type == 'sylvester_flow':
                 transforms = [Sylvester(input_dim=self.dim, count_transforms=8) for _ in range(self.flow_length)]
-                # transforms = [Sylvester(input_dim=self.dim) for _ in range(self.flow_length)]
             elif self.flow_type == 'householder_flow':
                 transforms = [Householder(input_dim=self.dim) for _ in range(self.flow_length)]
             elif self.flow_type == 'naf_flow':
-
                 # Custom params:
                 # transforms = [neural_autoregressive(input_dim=self.dim, hidden_dims=[3 * self.dim + 1] * self.flow_length, width=24) for i in range(self.flow_length)]
 
                 # Defaults:
                 transforms = [neural_autoregressive(input_dim=self.dim) for _ in range(self.flow_length)]
 
-                # Use a multiscale-architecture:
+                # Use a multiscale-architecture (RealNVP style):
                 # r = 2
                 # current_dims = self.dim
                 # for step in range(self.flow_length):
                 #     self.multi_scale_masks[step][current_dims:] = False
                 #     current_dims //= r
-                # # import ipdb; ipdb.set_trace()
                 # transforms = [neural_autoregressive(input_dim=int(mask.sum())) for mask in self.multi_scale_masks]
 
             elif self.flow_type == 'bnaf_flow':
-                # # Custom params:
-                # transforms = [block_autoregressive(input_dim=self.dim, hidden_factors=[8, 8, 8], activation="sigmoid")
-                #               for _ in range(self.flow_length)]
-                # # Defaults:            
-                # transforms = [block_autoregressive(input_dim=self.dim, activation="sigmoid") for i in range(self.flow_length)]
-                self.multi_scale_masks = [torch.ones(self.dim, dtype=torch.bool) for _ in range(self.flow_length)]
-                r = 2
-                current_dims = self.dim
-                for step in range(self.flow_length):
-                    self.multi_scale_masks[step][current_dims:] = False
-                    current_dims //= r
-                # import ipdb; ipdb.set_trace()
-                transforms = [block_autoregressive(input_dim=int(mask.sum()), activation="sigmoid") for mask in self.multi_scale_masks]
+                raise NotImplementedError
 
             elif self.flow_type == 'polynomial_flow':
                 # transforms = [polynomial(input_dim=self.dim, hidden_dims=[10 * self.dim for _ in range(self.flow_length)])]
@@ -616,11 +539,11 @@ class DensityEstimation(nn.Module):
         elif self.density_type == 'fact_normal':
             assert self.L_diag_elements.numel() == self.dim
             z = self.mu + z @ L
-        
-        
+        else:
+            raise NotImplementedError
         return z
 
-    def forward_flow(self, x, feats):
+    def forward_flow(self, x, feats=None):
         """
         Forward pass.
 
@@ -630,8 +553,6 @@ class DensityEstimation(nn.Module):
         Returns:
             transformed x and log-determinant of Jacobian.
         """
-        # joblib.dump(x.cpu().numpy(), 'base_dist.pkl')
-        # x = torch.as_tensor(joblib.load('base_dist.pkl')).to(feats.device)
         device = next(self.parameters()).device
         [B, _] = list(x.size())
         log_det = torch.zeros(B).to(device)
@@ -642,7 +563,6 @@ class DensityEstimation(nn.Module):
                 inc = curr_flow_step.log_abs_det_jacobian(x, x_next)
                 x = x_next
             elif isinstance(self.flow[i], TransformModule):
-                # x_next = self.flow[i](x)
                 x_next = torch.cat((self.flow[i](x[:, self.multi_scale_masks[i]]), x[:, ~self.multi_scale_masks[i]]), dim=-1)
                 assert torch.isfinite(x_next).all()
                 inc = self.flow[i].log_abs_det_jacobian(x, x_next)
@@ -653,7 +573,6 @@ class DensityEstimation(nn.Module):
             else:
                 raise NotImplementedError
             log_det = log_det + inc.squeeze()
-        # joblib.dump(x.cpu().numpy(), 'flow_dist_2xnaf_sig+1xfc.pkl')
         return x, log_det
 
     def sample_base(self, n):
@@ -702,14 +621,11 @@ class DensityEstimation(nn.Module):
     def _ldet_normal_cov(self, L):
         self._check_positive_definite(L)
         return 2 * (L.diag().log().sum() + 1e-6)
-        # return (L.diag().prod() + 1e-6).log() * 2
-        # return torch.logdet(L) * 2
 
     def _check_positive_definite(self, L):
         # https://math.stackexchange.com/questions/462682/why-does-the-cholesky-decomposition-requires-a-positive-definite-matrix
         if not (L.diag() > 0).all():
             import ipdb; ipdb.set_trace()
-        # assert (L.diag() > 0).all(), "The matrix L is not positive definite"
 
     @ property
     def _L(self):
@@ -750,393 +666,3 @@ def log_normal_diag(x, mean, log_var, average=False, reduce=True, dim=None):
             return torch.sum(log_norm, dim)
     else:
         return log_norm
-
-
-# class BatchNormFlow(nn.Module):
-#     def __init__(self, dim, eps=1e-5, requires_grad=True):
-#         """Instantiates one step of householder flow.
-
-#         Args:
-#             dim: input dimensionality.
-#         """
-#         super(BatchNormFlow, self).__init__()
-#         self.dim = dim
-#         self.lgamma = nn.Parameter(torch.zeros(self.dim), requires_grad=requires_grad)  # log_alpha
-#         self.beta = nn.Parameter(torch.zeros(self.dim), requires_grad=requires_grad)  # beta
-#         self.eps = eps
-
-#         self.register_buffer('m', torch.zeros(self.dim))  # running mean
-#         self.register_buffer('v', torch.ones(self.dim))  # running variance
-
-#     def forward(self, x):
-#         """Forward pass.
-
-#         Args:
-#             x: input tensor (B x D).
-#         Returns:
-#             transformed x and log-determinant of Jacobian.
-#         """
-#         if self.training:
-#             running_var = x.var(dim=0)
-#             running_mean = x.mean(dim=0)
-#         else:
-#             running_var = self.v
-#             running_mean = self.m
-#         x = torch.exp(self.lgamma) * (x - running_mean) / torch.sqrt(running_var + self.eps) + self.beta
-#         log_det = (self.lgamma - 0.5 * torch.log(running_var + self.eps)).sum(dim=-1, keepdim=True)
-#         return x, log_det
-
-
-# class cBatchNormFlow(nn.Module):
-#     def __init__(self, dim, eps=1e-5, requires_grad=True):
-#         """Instantiates one step of householder flow.
-
-#         Args:
-#             dim: input dimensionality.
-#         """
-#         super(cBatchNormFlow, self).__init__()
-#         self.dim = dim
-#         self.lgamma = nn.Parameter(torch.zeros(self.dim), requires_grad=requires_grad)  # log_alpha
-#         self.beta = nn.Parameter(torch.zeros(self.dim), requires_grad=requires_grad)  # beta
-#         self.eps = eps
-
-#         self.register_buffer('m', torch.zeros(self.dim))  # running mean
-#         self.register_buffer('v', torch.ones(self.dim))  # running variance
-
-#     def forward(self, x, v):
-#         """Forward pass.
-
-#         Args:
-#             x: input tensor (B x D).
-#         Returns:
-#             transformed x and log-determinant of Jacobian.
-#         """
-#         if self.training:
-#             running_var = x.var(dim=0)
-#             running_mean = x.mean(dim=0)
-#         else:
-#             running_var = self.v
-#             running_mean = self.m
-#         x = torch.exp(self.lgamma) * (x - running_mean) / torch.sqrt(running_var + self.eps) + self.beta
-#         log_det = (self.lgamma - 0.5 * torch.log(running_var + self.eps)).sum(dim=-1, keepdim=True)
-#         return x, v, log_det
-
-
-# class cRadialFlow(nn.Module):
-#     def __init__(self, fdim, dim):
-#         """Instantiates one step of radial flow.
-
-#         Args:
-#             dim: input dimensionality.
-#         """
-#         super(cRadialFlow, self).__init__()
-
-#         self.d = dim
-#         self.linear_a = nn.Linear(fdim, 1)
-#         self.linear_b = nn.Linear(fdim, 1)
-#         self.linear_c = nn.Linear(fdim, dim)
-#         # Transformation for the next block
-#         self.feature_transform = nn.Sequential(
-#             nn.Linear(fdim, fdim),
-#             nn.Sigmoid(),
-#             nn.Dropout(0.2)
-#         )
-
-#     def forward(self, x, v):
-#         """Forward pass.
-
-#         Args:
-#             x: input tensor (B x D).
-#             v: output from last layer of encoder (B x D).
-#         Returns:
-#             transformed x and log-determinant of Jacobian.
-#         """
-#         a, b, c = self.linear_a(v), self.linear_b(v), self.linear_c(v)
-
-#         def m(x):
-#             return F.softplus(x)
-
-#         def h(r):
-#             return 1. / (a + r)
-
-#         def h_prime(r):
-#             return -h(r)**2
-
-#         a = torch.exp(a)
-#         b = -a + m(b)
-#         r = (x - c).norm(dim=1, keepdim=True)
-#         tmp = b * h(r)
-#         x = x + tmp * (x - c)
-#         log_det = (self.d - 1) * torch.log(1. + tmp) + torch.log(1. + tmp + b * h_prime(r) * r)
-#         return x, self.feature_transform(v), log_det
-
-
-# class cPlanarFlow(nn.Module):
-#     def __init__(self, fdim, dim):
-#         """Instantiates one step of planar flow.
-
-#         Reference:
-#         Variational Inference with Normalizing Flows
-#         Danilo Jimenez Rezende, Shakir Mohamed
-#         (https://arxiv.org/abs/1505.05770)
-
-#         Args:
-#             fdim: conditined feature dimensionality.
-#             dim: input dimensionality.
-#         """
-#         super(cPlanarFlow, self).__init__()
-
-#         self.linear_u = nn.Linear(fdim, dim)
-#         self.linear_w = nn.Linear(fdim, dim)
-#         self.linear_b = nn.Linear(fdim, 1)
-#         # Transformation for the next block
-#         self.feature_transform = nn.Sequential(
-#             nn.Linear(fdim, fdim),
-#             nn.Sigmoid(),
-#             nn.Dropout(0.2)
-#         )
-
-#     def forward(self, x, v):
-#         """Forward pass.
-
-#         Args:
-#             v: output from last layer of encoder (B x D).
-#             x: input tensor (B x D).
-#         Returns:
-#             transformed x and log-determinant of Jacobian.
-#         """
-#         u_ = self.linear_u(v)
-#         w_ = self.linear_w(v)
-#         b_ = self.linear_b(v)
-
-#         def m(x):
-#             return F.softplus(x) - 1.
-
-#         def h(x):
-#             return torch.tanh(x)
-
-#         def h_prime(x):
-#             return 1. - h(x)**2
-
-#         inner = (w_ * self.u).sum()
-#         u = self.u + (m(inner) - inner) * w_ / w_.norm()**2
-#         activation = (w_ * x).sum(dim=1, keepdim=True) + self.b
-#         x = x + u * h(activation)
-
-#         psi = h_prime(activation) * w_
-#         log_det = torch.log(torch.abs(1. + (u * psi).sum(dim=1, keepdim=True)))
-
-#         return x, self.feature_transform(v), log_det
-
-
-# class PlanarFlow(nn.Module):
-#     def __init__(self, dim):
-#         """Instantiates one step of planar flow.
-
-#         Reference:
-#         Variational Inference with Normalizing Flows
-#         Danilo Jimenez Rezende, Shakir Mohamed
-#         (https://arxiv.org/abs/1505.05770)
-
-#         Args:
-#             dim: input dimensionality.
-#         """
-#         super(PlanarFlow, self).__init__()
-
-#         self.u = nn.Parameter(torch.randn(1, dim))
-#         self.w = nn.Parameter(torch.randn(1, dim))
-#         self.b = nn.Parameter(torch.randn(1))
-
-#     def forward(self, x):
-#         """Forward pass.
-
-#         Args:
-#             x: input tensor (B x D).
-#         Returns:
-#             transformed x and log-determinant of Jacobian.
-#         """
-#         def m(x):
-#             return F.softplus(x) - 1.
-
-#         def h(x):
-#             return torch.tanh(x)
-
-#         def h_prime(x):
-#             return 1. - h(x)**2
-
-#         inner = (self.w * self.u).sum()
-#         u = self.u + (m(inner) - inner) * self.w / self.w.norm()**2
-#         activation = (self.w * x).sum(dim=1, keepdim=True) + self.b
-#         x = x + u * h(activation)
-
-#         psi = h_prime(activation) * self.w
-#         log_det = torch.log(torch.abs(1. + (u * psi).sum(dim=1, keepdim=True)))
-
-#         return x, log_det
-
-
-# class PlanarFlow(nn.Module):
-#     """Implementation of the invertible transformation used in planar flow:
-#         f(z) = z + u * h(dot(w.T, z) + b)
-#     See Section 4.1 in https://arxiv.org/pdf/1505.05770.pdf.
-#     """
-
-#     def __init__(self, dim: int = 2):
-#         """Initialise weights and bias.
-
-#         Args:
-#             dim: Dimensionality of the distribution to be estimated.
-#         """
-#         super().__init__()
-#         self.w = nn.Parameter(torch.randn(1, dim).normal_(0, 0.1))
-#         self.b = nn.Parameter(torch.randn(1).normal_(0, 0.1))
-#         self.u = nn.Parameter(torch.randn(1, dim).normal_(0, 0.1))
-
-#     def forward(self, z):
-#         if torch.mm(self.u, self.w.T) < -1:
-#             self.get_u_hat()
-#         a = torch.mm(z, self.w.T) + self.b
-#         psi = (1 - torch.tanh(a) ** 2) * self.w
-#         log_det = torch.log(1e-15 + (1 + torch.mm(self.u, psi.T)).abs())
-
-#         return z + self.u * torch.tanh(a), log_det
-
-#     def get_u_hat(self) -> None:
-#         """Enforce w^T u >= -1. When using h(.) = tanh(.), this is a sufficient condition
-#         for invertibility of the transformation f(z). See Appendix A.1.
-#         """
-#         wtu = torch.mm(self.u, self.w.T)
-#         m_wtu = -1 + torch.log(1 + torch.exp(wtu))
-#         self.u.data = (
-#             self.u + (m_wtu - wtu) * self.w / torch.norm(self.w, p=2, dim=1) ** 2
-#         )
-
-
-# class RadialFlow(nn.Module):
-#     def __init__(self, dim):
-#         """Instantiates one step of radial flow.
-
-#         Reference:
-#         Variational Inference with Normalizing Flows
-#         Danilo Jimenez Rezende, Shakir Mohamed
-#         (https://arxiv.org/abs/1505.05770)
-
-#         Args:
-#             dim: input dimensionality.
-#         """
-#         super(RadialFlow, self).__init__()
-
-#         self.a = nn.Parameter(torch.randn(1))
-#         self.b = nn.Parameter(torch.randn(1))
-#         self.c = nn.Parameter(torch.randn(1, dim))
-#         self.d = dim
-
-#     def forward(self, x):
-#         """Forward pass.
-
-#         Args:
-#             x: input tensor (B x D).
-#         Returns:
-#             transformed x and log-determinant of Jacobian.
-#         """
-#         def m(x):
-#             return F.softplus(x)
-
-#         def h(r):
-#             return 1. / (a + r)
-
-#         def h_prime(r):
-#             return -h(r)**2
-
-#         a = torch.exp(self.a)
-#         b = -a + m(self.b)
-#         r = (x - self.c).norm(dim=1, keepdim=True)
-#         tmp = b * h(r)
-#         x = x + tmp * (x - self.c)
-#         log_det = (self.d - 1) * torch.log(1. + tmp) + torch.log(1. + tmp + b * h_prime(r) * r)
-
-#         return x, log_det
-
-
-# class HouseholderFlow(nn.Module):
-#     def __init__(self, dim):
-#         """Instantiates one step of householder flow.
-
-#         Reference:
-#         Improving Variational Auto-Encoders using Householder Flow
-#         Jakub M. Tomczak, Max Welling
-#         (https://arxiv.org/abs/1611.09630)
-
-#         Args:
-#             dim: input dimensionality.
-#         """
-#         super(HouseholderFlow, self).__init__()
-
-#         self.v = nn.Parameter(torch.randn(1, dim))
-#         self.d = dim
-
-#     def forward(self, x):
-#         """Forward pass.
-
-#         Args:
-#             x: input tensor (B x D).
-#         Returns:
-#             transformed x and log-determinant of Jacobian.
-#         """
-#         outer = self.v.t() * self.v
-#         v_sqr = self.v.norm()**2
-#         H = torch.eye(self.d).cuda() - 2. * outer / v_sqr
-#         x = torch.mm(H, x.t()).t()
-
-#         return x, 0
-
-
-# class NiceFlow(nn.Module):
-#     def __init__(self, dim, mask, final=False):
-#         """Instantiates one step of NICE flow.
-
-#         Reference:
-#         NICE: Non-linear Independent Components Estimation
-#         Laurent Dinh, David Krueger, Yoshua Bengio
-#         (https://arxiv.org/abs/1410.8516)
-
-#         Args:
-#             dim: input dimensionality.
-#             mask: mask that determines active variables.
-#             final: True if the final step, False otherwise.
-#         """
-#         super(NiceFlow, self).__init__()
-
-#         self.final = final
-#         if final:
-#             self.scale = nn.Parameter(torch.zeros(1, dim))
-#         else:
-#             self.mask = mask
-#             self.coupling = nn.Sequential(
-#                 nn.Linear(dim // 2, dim * 5), nn.ReLU(),
-#                 nn.Linear(dim * 5, dim * 5), nn.ReLU(),
-#                 nn.Linear(dim * 5, dim // 2))
-
-#     def forward(self, x):
-#         if self.final:
-#             x = x * torch.exp(self.scale)
-#             log_det = torch.sum(self.scale)
-
-#             return x, log_det
-#         else:
-#             [B, W] = list(x.size())
-#             x = x.reshape(B, W // 2, 2)
-
-#             if self.mask:
-#                 on, off = x[:, :, 0], x[:, :, 1]
-#             else:
-#                 off, on = x[:, :, 0], x[:, :, 1]
-
-#             on = on + self.coupling(off)
-
-#             if self.mask:
-#                 x = torch.stack((on, off), dim=2)
-#             else:
-#                 x = torch.stack((off, on), dim=2)
-
-#             return x.reshape(B, W), 0

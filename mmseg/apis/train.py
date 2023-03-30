@@ -236,7 +236,6 @@ def train_segmentor(model,
         runner.model.module.freeze_decoder_except_density_estimation()
     elif cfg.load_from and not is_bll:
         if freeze_encoder and init_not_frozen:
-
             ckpt = torch.load(cfg.load_from)
             to_keep = [k for k in ckpt["state_dict"].keys() if k.startswith('backbone')]
             to_delete = [k for k in ckpt["state_dict"].keys() if not k.startswith('backbone')]
@@ -256,11 +255,9 @@ def train_segmentor(model,
                 del ckpt["state_dict"][k]
             cfg.load_from = os.path.join(cfg.work_dir, "src.pth")
             torch.save(ckpt, cfg.load_from)
-            # import ipdb; ipdb.set_trace()
             runner.load_checkpoint(cfg.load_from)
             runner.model.module.freeze_encoder()
             runner.model.module.freeze_feature_extractor()
-            # import ipdb; ipdb.set_trace()
         else:
             runner.load_checkpoint(cfg.load_from)
     else:

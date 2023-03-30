@@ -49,7 +49,10 @@ class RoadAnomalyDataset(CustomDataset):
         return auroc, apr, fpr
 
     def get_in_out_conf(self, pred_confs, seg_gt, conf_type):
-        assert conf_type in ("max_prob", "max_logit", "entropy", "vacuity", "dissonance")
+        # conf_type could be lo or hi and stands for in-distribution show have a lo(lower) or hi(higher) value 
+        # compared to oo-distribution.
+        
+        assert conf_type in ("lo", "hi")
         confs = deepcopy(pred_confs)
         # Mask ignored index
         mask = (seg_gt != self.ignore_index)
@@ -63,12 +66,9 @@ class RoadAnomalyDataset(CustomDataset):
             out_index = np.logical_or(out_index, (seg_gt == label))
 
         # samples with out indices are positive class so they should have higher scores
-        if conf_type == "max_logit":
+        if conf_type == "hi":
             in_scores = - confs[np.logical_not(out_index)]
             out_scores = - confs[out_index]
-        elif conf_type == "max_prob":
-            in_scores = 1 - confs[np.logical_not(out_index)]
-            out_scores = 1 - confs[out_index]
         else:
             # entropy, vacuity, dissonance
             in_scores = confs[np.logical_not(out_index)]
