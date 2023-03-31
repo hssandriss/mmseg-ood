@@ -7,7 +7,7 @@ import torch
 # with open('initial_1000_z_samples_base_I.npy', 'rb') as f:
 #     z_ = np.load(f)
 # np.savetxt("initial_1000_z_samples_base_I.csv", z_)
-# import ipdb; ipdb.set_trace()
+
 data_path_initial = 'initial_1000_z_samples_base.csv'
 data_path_initial_I = 'initial_5000_z_samples_base_I.csv'
 data_path_trained2xradial = 'trained_5000_z_samples_2xradial.csv'

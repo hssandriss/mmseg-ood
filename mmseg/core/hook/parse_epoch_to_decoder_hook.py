@@ -16,7 +16,8 @@ class ParseEpochToDecodeHead(Hook):
     def after_epoch(self, runner):
         if hasattr(runner.model.module.decode_head, "epoch_num"):
             if runner.model.module.decode_head.epoch_num != runner.epoch:
-                import ipdb; ipdb.set_trace()
+                print_log(f"model is at epoch: {runner.model.module.decode_head.epoch_num}, runner is at epoch: {runner.epoch}")
+                
         if hasattr(runner.model.module.decode_head, "kl_vals"):
             assert all(runner.model.module.decode_head.kl_weights[0] == w for w in runner.model.module.decode_head.kl_weights[1:])
             print_log(f"KL weight: {float(np.mean(runner.model.module.decode_head.kl_weights)):.2f}")
@@ -29,6 +30,5 @@ class ParseEpochToDecodeHead(Hook):
             if runner.epoch > 0 and (
                     runner.model.module.decode_head.epoch_num + 1 != runner.epoch or
                     runner.model.module.decode_head.total_epochs != runner._max_epochs):
-                import ipdb; ipdb.set_trace()
             runner.model.module.decode_head.epoch_num = runner.epoch
             runner.model.module.decode_head.total_epochs = runner._max_epochs

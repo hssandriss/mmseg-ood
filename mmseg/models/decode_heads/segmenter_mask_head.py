@@ -220,14 +220,16 @@ class SegmenterMaskTransformerBllHead(BllBaseDecodeHead):
         self.init_std = init_std
 
         self.patch_proj_w_shape =  self.patch_proj.weight.shape
-        self.classes_proj_shape =  self.classes_proj.weight.shape
-        self.patch_proj_w_numel, self.classes_proj_w_numel = self.patch_proj.weight.numel(), self.classes_proj.weight.numel()
-        self.ll_param_numel = self.patch_proj_w_numel+ self.classes_proj_w_numel
+        # self.classes_proj_shape =  self.classes_proj.weight.shape
+        # self.patch_proj_w_numel, self.classes_proj_w_numel = self.patch_proj.weight.numel(), self.classes_proj.weight.numel()
+        self.patch_proj_w_numel = self.patch_proj.weight.numel()
+        # self.ll_param_numel = self.patch_proj_w_numel+ self.classes_proj_w_numel
+        self.ll_param_numel = self.patch_proj_w_numel+ self.patch_proj_w_numel
         self.density_estimation_to_params = nn.Linear(self.vi_latent_dim, self.ll_param_numel, bias=False)
         self.build_density_estimator()
         delattr(self, 'conv_seg')
         delattr(self, 'patch_proj')
-        delattr(self, 'classes_proj')
+        # delattr(self, 'classes_proj')
 
         
     def init_weights(self):
@@ -303,9 +305,10 @@ class SegmenterMaskTransformerBllHead(BllBaseDecodeHead):
                 feats = self.dropout(feats)
             z_ = z_.squeeze()
             self.patch_proj_w = z_[:self.patch_proj_w_numel].reshape(self.patch_proj_w_shape) 
-            self.classes_proj_w  = z_[self.patch_proj_w_numel:].reshape(self.classes_proj_shape)
+            # self.classes_proj_w  = z_[self.patch_proj_w_numel:].reshape(self.classes_proj_shape)
             patches = F.linear(feats[:, :-self.num_classes], self.patch_proj_w, None)
-            cls_seg_feat = F.linear(feats[:, -self.num_classes:], self.classes_proj_w, None) 
+            # cls_seg_feat = F.linear(feats[:, -self.num_classes:], self.classes_proj_w, None) 
+            cls_seg_feat = self.classes_proj(feats[:, -self.num_classes:])
 
             patches = F.normalize(patches, dim=2, p=2)
             cls_seg_feat = F.normalize(cls_seg_feat, dim=2, p=2)
@@ -333,10 +336,11 @@ class SegmenterMaskTransformerBllHead(BllBaseDecodeHead):
                 x_ = self.dropout(x_)
             z_ = z_.squeeze()
             self.patch_proj_w = z_[:self.patch_proj_w_numel].reshape(self.patch_proj_w_shape) 
-            self.classes_proj_w  = z_[self.patch_proj_w_numel:].reshape(self.classes_proj_shape)
+            # self.classes_proj_w  = z_[self.patch_proj_w_numel:].reshape(self.classes_proj_shape)
             patches = F.linear(x_[:, :-self.num_classes], self.patch_proj_w, None)
-            cls_seg_feat = F.linear(x_[:, -self.num_classes:], self.classes_proj_w, None) 
-
+            # cls_seg_feat = F.linear(x_[:, -self.num_classes:], self.classes_proj_w, None) 
+            cls_seg_feat = self.classes_proj(x_[:, -self.num_classes:])
+            
             patches = F.normalize(patches, dim=2, p=2)
             cls_seg_feat = F.normalize(cls_seg_feat, dim=2, p=2)
             masks = patches @ cls_seg_feat.transpose(1, 2)

@@ -381,7 +381,7 @@ def main():
         # prev_map = torch.cat([model.module.decode_head.conv_seg.weight.reshape(-1), model.module.decode_head.conv_seg.bias.reshape(-1)]).detach().data
         # curr_map = model.module.decode_head.density_estimation.z0_mean.data
         # assert torch.eq(prev_map, curr_map).all(), 'the base dist mean does not coincide with previous MAP'
-        # import ipdb; ipdb.set_trace()
+
         rank, _ = get_dist_info()
         if rank == 0:
             if args.out:
@@ -475,7 +475,7 @@ def main():
                 ans.append(curr_res)
 
     print("For latex:")
-    # import ipdb; ipdb.set_trace()
+
     if sl_ood_valid:
         print(
             f"{reg_ood_summary.loc[i, 'max_prob.auroc']*100}&{reg_ood_summary.loc[i, 'max_prob.aupr']*100}&{reg_ood_summary.loc[i, 'max_prob.fpr95']*100}")
@@ -514,7 +514,7 @@ def main():
     
     reg_ood_summary.to_csv(os.path.join(args.work_dir, f"reg_ood_metrics_{suffixe}_{fusion_method}{'_subtest' if args.config.endswith('subtest.py') else ''}.csv"))
     sl_ood_summary.to_csv(os.path.join(args.work_dir, f"sl_ood_metrics_{suffixe}_{fusion_method}{'_subtest' if args.config.endswith('subtest.py') else ''}.csv"))
-    import ipdb; ipdb.set_trace()
+    
 
 if __name__ == '__main__':
     main()

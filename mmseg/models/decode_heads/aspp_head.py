@@ -185,7 +185,6 @@ class ASPPBllHead(BllBaseDecodeHead):
                 H, W) which is feature map for last layer of decoder head.
         """
         x = self._transform_inputs(inputs)
-        # import ipdb; ipdb.set_trace()
         low_feats = self.image_pool(x)
         aspp_outs = [
             resize(
@@ -222,7 +221,6 @@ class ASPPBllHead(BllBaseDecodeHead):
         elif nsamples > 1 and self.density_type == 'flow':
             z0 = self.density_estimation.sample_base(nsamples)
             # joblib.dump(z0.detach().cpu().numpy(), 'base_samples.pkl')
-            # import ipdb; ipdb.set_trace()
             # z0 = torch.as_tensor(joblib.load('base_samples.pkl')).to(output.device)
 
             zk, sum_log_jacobians = self.density_estimation.forward_flow(z0, low_feats)
@@ -289,7 +287,6 @@ class ASPPBllHead(BllBaseDecodeHead):
             # dropout_x = x
             z_ = z_.squeeze()
             output.append(F.conv2d(input=dropout_x, weight=z_[:self.w_numel].reshape(self.w_shape), bias=z_[-self.b_numel:].reshape(self.b_shape)))
-        # import ipdb; ipdb.set_trace()
         return torch.cat(output, dim=0)
 
     def conv_seg_forward(self, x, z):

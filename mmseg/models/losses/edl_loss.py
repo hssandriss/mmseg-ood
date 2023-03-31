@@ -174,8 +174,7 @@ class EDLLoss(nn.Module):
 
         self.epoch_num = 0
         self.total_epochs = total_epochs
-        # self.temp = np.linspace(10, 0.1, self.total_epochs).tolist()
-        # import ipdb; ipdb.set_trace()
+        
         self.lam_schedule = []
         for epoch in range(self.total_epochs):
             self.lam_schedule.append(lam(epoch, self.total_epochs, self.annealing_start,

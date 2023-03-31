@@ -322,7 +322,6 @@ def single_gpu_test(model,
                         normalized_comb_u = normalized_comb_u.cpu().squeeze().numpy()
                         normalized_comb_u[ignore_mask] = 0.
                         plot_conf(normalized_comb_u, out_file[: -4] + "_edl_wfusion_u" + out_file[-4:])
-                        # import ipdb; ipdb.set_trace()
                         normalized_comb_dir_entropy[ignore_mask] = normalized_comb_dir_entropy.min()
                         plot_conf(normalized_comb_dir_entropy, out_file[: -4] + "_edl_wfusion_dir_entropy" + out_file[-4:])
 
