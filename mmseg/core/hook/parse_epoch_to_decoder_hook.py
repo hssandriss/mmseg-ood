@@ -30,5 +30,5 @@ class ParseEpochToDecodeHead(Hook):
             if runner.epoch > 0 and (
                     runner.model.module.decode_head.epoch_num + 1 != runner.epoch or
                     runner.model.module.decode_head.total_epochs != runner._max_epochs):
-            runner.model.module.decode_head.epoch_num = runner.epoch
-            runner.model.module.decode_head.total_epochs = runner._max_epochs
+                runner.model.module.decode_head.epoch_num = runner.epoch
+                runner.model.module.decode_head.total_epochs = runner._max_epochs
