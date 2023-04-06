@@ -1,13 +1,13 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from mmcv.cnn import ConvModule
 
 from mmseg.ops import resize
 from ..builder import HEADS
-from .decode_head import BaseDecodeHead
 from .bll_decode_head import BllBaseDecodeHead
-import torch.nn.functional as F
+from .decode_head import BaseDecodeHead
 
 
 class ASPPModule(nn.ModuleList):
@@ -166,11 +166,16 @@ class ASPPBllHead(BllBaseDecodeHead):
             conv_cfg=self.conv_cfg,
             norm_cfg=self.norm_cfg,
             act_cfg=self.act_cfg)
-        
-        self.w_shape, self.b_shape = self.conv_seg.weight.shape, self.conv_seg.bias.shape
-        self.w_numel, self.b_numel = self.conv_seg.weight.numel(), self.conv_seg.bias.numel()
+
+        self.w_shape = self.conv_seg.weight.shape
+        self.b_shape = self.conv_seg.bias.shape
+
+        self.w_numel = self.conv_seg.weight.numel()
+        self.b_numel = self.conv_seg.bias.numel()
+
         self.ll_param_numel = self.w_numel + self.b_numel
-        self.density_estimation_to_params = nn.Linear(self.vi_latent_dim, self.ll_param_numel, bias=False)
+        self.density_estimation_to_params = nn.Linear(
+            self.vi_latent_dim, self.ll_param_numel, bias=False)
         self.build_density_estimator()
 
     def _forward_feature(self, inputs):
@@ -205,69 +210,73 @@ class ASPPBllHead(BllBaseDecodeHead):
         with torch.no_grad():
             output, low_feats = self._forward_feature(inputs)
         # print(output.shape)
-        assert output.is_leaf, "you are backpropagating on feature extractor !"
+        assert output.is_leaf, 'you are backpropagating on feature extractor!'
         # torch.cuda.synchronize()
         # t1 = time.time()
         if nsamples == 1 and self.density_type == 'flow':
             # z0 = self.density_estimation.z0_mean.data.unsqueeze(0)
             z0 = self.density_estimation.sample_base(1)
-            zk, sum_log_jacobians = self.density_estimation.forward_flow(z0, low_feats)
+            zk, sum_log_jacobians = self.density_estimation.forward_flow(
+                z0, low_feats)
             output = self.cls_seg_x(output, zk)
             # Reverse KLD: https://arxiv.org/abs/1912.02762 page 7 Eq. 17-18
-            kl = - sum_log_jacobians.mean()
-            # kl = self.density_estimation.flow_kl_loss(z0, zk, sum_log_jacobians)
-            # kl = self.density_estimation.flow_kl_loss_analytical(sum_log_jacobians)
+            kl = -sum_log_jacobians.mean()
+            # kl = self.density_estimation.flow_kl_loss(z0,
+            #                                           zk, sum_log_jacobians)
+            # kl = self.density_estimation.flow_kl_loss_analytical(
+            #     sum_log_jacobians)
             return output, kl
         elif nsamples > 1 and self.density_type == 'flow':
             z0 = self.density_estimation.sample_base(nsamples)
-            # joblib.dump(z0.detach().cpu().numpy(), 'base_samples.pkl')
-            # z0 = torch.as_tensor(joblib.load('base_samples.pkl')).to(output.device)
-
-            zk, sum_log_jacobians = self.density_estimation.forward_flow(z0, low_feats)
-            # joblib.dump(zk.detach().cpu().numpy(), 'naf_samples.pkl')
-            # print("Variance of z >>>>>", zk.var(0).mean())
-
+            zk, sum_log_jacobians = self.density_estimation.forward_flow(
+                z0, low_feats)
             output = self.cls_seg_x(output, zk)
             # Reverse KLD: https://arxiv.org/abs/1912.02762 page 7 Eq. 17-18
-            # kl = - sum_log_jacobians.mean()
-            kl = self.density_estimation.flow_kl_loss(z0, zk, sum_log_jacobians)
-            # kl = self.density_estimation.flow_kl_loss_analytical(sum_log_jacobians)
+            kl = self.density_estimation.flow_kl_loss(z0, zk,
+                                                      sum_log_jacobians)
+            # kl = self.density_estimation.flow_kl_loss_analytical(
+            #     sum_log_jacobians)
             return output, kl
         elif nsamples == 1 and self.density_type == 'conditional_flow':
             z0 = self.density_estimation.z0_mean.data.unsqueeze(0)
-            zk, sum_log_jacobians = self.density_estimation.forward_flow(z0, low_feats)
+            zk, sum_log_jacobians = self.density_estimation.forward_flow(
+                z0, low_feats)
             output = self.cls_seg(output, zk)
             # Reverse KLD: https://arxiv.org/abs/1912.02762 page 7 Eq. 17-18
             # kl = - sum_log_jacobians.mean()
-            kl = self.density_estimation.flow_kl_loss(z0, zk, sum_log_jacobians)
-            # kl = self.density_estimation.flow_kl_loss_analytical(sum_log_jacobians)
+            kl = self.density_estimation.flow_kl_loss(z0, zk,
+                                                      sum_log_jacobians)
+            # kl = self.density_estimation.flow_kl_loss_analytical(
+            #     sum_log_jacobians)
             return output, kl
         elif nsamples > 1 and self.density_type == 'conditional_flow':
             z0 = self.density_estimation.sample_base(nsamples)
-            zk, sum_log_jacobians = self.density_estimation.forward_flow(z0, low_feats)
+            zk, sum_log_jacobians = self.density_estimation.forward_flow(
+                z0, low_feats)
             if self.training:
                 output = self.cls_seg(output, zk)
             else:
                 output = self.cls_seg_x(output, zk)
             # Reverse KLD: https://arxiv.org/abs/1912.02762 page 7 Eq. 17-18
             # kl = - sum_log_jacobians.mean()
-            kl = self.density_estimation.flow_kl_loss(z0, zk, sum_log_jacobians)
-            # kl = self.density_estimation.flow_kl_loss_analytical(sum_log_jacobians)
+            kl = self.density_estimation.flow_kl_loss(z0, zk,
+                                                      sum_log_jacobians)
+            # kl = self.density_estimation.flow_kl_loss_analytical(
+            #     sum_log_jacobians)
 
             return output, kl
-        elif nsamples == 1 and self.density_type in ('full_normal', 'fact_normal'):
+        elif nsamples == 1 and self.density_type in ('full_normal',
+                                                     'fact_normal'):
             L = self.density_estimation._L
             zk = self.density_estimation.mu.data.unsqueeze(0)
             kl = self.density_estimation.normal_kl_loss(L)
             output = self.cls_seg_x(output, zk)
             return output, kl
-        elif nsamples > 1 and self.density_type in ('full_normal', 'fact_normal'):
+        elif nsamples > 1 and self.density_type in ('full_normal',
+                                                    'fact_normal'):
             L = self.density_estimation._L
             z0 = self.density_estimation.sample_base(nsamples)
-            # z0 = torch.as_tensor(joblib.load('base_samples.pkl')).to(output.device)
             zk = self.density_estimation.forward_normal(z0, L)
-            # joblib.dump(zk.detach().cpu().numpy(), 'full_normal_samples.pkl')
-            # print("Variance of z >>>>>", zk.var(0).mean())
             kl = self.density_estimation.normal_kl_loss(L)
             output = self.cls_seg_x(output, zk)
             return output, kl
@@ -286,7 +295,11 @@ class ASPPBllHead(BllBaseDecodeHead):
             dropout_x = self.dropout(x)
             # dropout_x = x
             z_ = z_.squeeze()
-            output.append(F.conv2d(input=dropout_x, weight=z_[:self.w_numel].reshape(self.w_shape), bias=z_[-self.b_numel:].reshape(self.b_shape)))
+            output.append(
+                F.conv2d(
+                    input=dropout_x,
+                    weight=z_[:self.w_numel].reshape(self.w_shape),
+                    bias=z_[-self.b_numel:].reshape(self.b_shape)))
         return torch.cat(output, dim=0)
 
     def conv_seg_forward(self, x, z):
@@ -302,6 +315,10 @@ class ASPPBllHead(BllBaseDecodeHead):
         for x_, z_ in zip(x_list, z_list):
             dropout_x = self.dropout(x_)
             z_ = z_.squeeze()
-            output.append(F.conv2d(input=dropout_x, weight=z_[:self.w_numel].reshape(self.w_shape), bias=z_[-self.b_numel:].reshape(self.b_shape)))
+            output.append(
+                F.conv2d(
+                    input=dropout_x,
+                    weight=z_[:self.w_numel].reshape(self.w_shape),
+                    bias=z_[-self.b_numel:].reshape(self.b_shape)))
         assert len(output) == z.size(0)
         return torch.cat(output, dim=0)
