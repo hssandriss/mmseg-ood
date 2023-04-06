@@ -1,24 +1,27 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import math
 import warnings
 from abc import ABCMeta, abstractmethod
 
 import torch
+import torch.distributions as tdist
 import torch.nn as nn
-import numpy as np
+import torch.nn.functional as F
 from mmcv.runner import BaseModule, auto_fp16, force_fp32
+from pyro.distributions.conditional import ConditionalTransformModule
+from pyro.distributions.torch_transform import TransformModule
+from pyro.distributions.transforms import (BatchNorm, ConditionalHouseholder,
+                                           ConditionalPlanar,
+                                           ConditionalRadial, Householder,
+                                           Planar, Radial, Sylvester,
+                                           conditional_neural_autoregressive,
+                                           neural_autoregressive, polynomial)
+from pyro.nn import DenseNN
+
 from mmseg.core import build_pixel_sampler
 from mmseg.ops import resize
 from ..builder import build_loss
 from ..losses import accuracy
-from ..losses import EDLLoss
-import torch.nn.functional as F
-import torch.distributions as tdist
-from pyro.nn import DenseNN
-from pyro.distributions.transforms import Sylvester, Radial, Planar, Householder, ConditionalPlanar, ConditionalRadial, ConditionalHouseholder, BatchNorm, polynomial, neural_autoregressive, conditional_neural_autoregressive, block_autoregressive, Permute, BlockAutoregressive
-from pyro.distributions.torch_transform import TransformModule
-from pyro.distributions.conditional import ConditionalTransformModule
-import math
-import numpy as np
 
 
 class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
@@ -80,7 +83,8 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
                  ignore_index=255,
                  sampler=None,
                  align_corners=False,
-                 init_cfg=dict(type='Normal', std=0.01, override=dict(name='conv_seg')),
+                 init_cfg=dict(
+                     type='Normal', std=0.01, override=dict(name='conv_seg')),
                  density_type='flow',
                  kl_weight=1.,
                  flow_type='planar_flow',
@@ -144,7 +148,8 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         else:
             self.sampler = None
 
-        self.conv_seg = nn.Conv2d(channels, self.out_channels, kernel_size=1).train(False)
+        self.conv_seg = nn.Conv2d(
+            channels, self.out_channels, kernel_size=1).train(False)
         if dropout_ratio > 0:
             self.dropout = nn.Dropout2d(dropout_ratio)
         else:
@@ -160,22 +165,26 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         self.flow_length = flow_length
         self.vi_nsamples_train = vi_nsamples_train
         self.vi_nsamples_test = vi_nsamples_test
-    
+
         # Tracking KL of VI
         self.kl_vals = []
         self.kl_weights = []
         self.epoch_num = 0
         self.total_epochs = 70
-        
+
     def build_density_estimator(self):
         if not self.vi_use_lower_dim:
             self.latent_dim = self.ll_param_numel
         else:
-            assert isinstance(self.vi_latent_dim, int), "When using lower dim in density, you need to specify 'vi_latent_dim'"
+            assert isinstance(
+                self.vi_latent_dim, int
+            ), "When using lower dim in density, 'vi_latent_dim' is required !"
             self.latent_dim = self.vi_latent_dim
-        
+
         if self.density_type == 'flow':
-            if self.flow_type in ('householder_flow', 'planar_flow', 'radial_flow', 'sylvester_flow', 'naf_flow', 'bnaf_flow', "polynomial_flow"):
+            if self.flow_type in ('householder_flow', 'planar_flow',
+                                  'radial_flow', 'sylvester_flow', 'naf_flow',
+                                  'bnaf_flow', 'polynomial_flow'):
                 self.density_estimation = DensityEstimation(
                     dim=self.latent_dim,
                     density_type=self.density_type,
@@ -185,7 +194,10 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
             else:
                 raise NotImplementedError
         elif self.density_type == 'conditional_flow':
-            if self.flow_type in ('conditional_radial_flow', 'conditional_planar_flow', 'conditional_householder_flow', 'conditional_naf_flow'):
+            if self.flow_type in ('conditional_radial_flow',
+                                  'conditional_planar_flow',
+                                  'conditional_householder_flow',
+                                  'conditional_naf_flow'):
                 self.density_estimation = DensityEstimation(
                     dim=self.latent_dim,
                     density_type=self.density_type,
@@ -196,24 +208,25 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
                 raise NotImplementedError
         elif self.density_type in ('full_normal', 'fact_normal'):
             self.density_estimation = DensityEstimation(
-                self.latent_dim,
-                self.density_type)
+                self.latent_dim, self.density_type)
         else:
             raise NotImplementedError
-    
+
     def update_z0_params(self):
-        """
-        To run after loading weights
-        It initializes the base distribution as a gaussian aroud previous MAP solution
-        """
-        initial_z = torch.cat([self.conv_seg.weight.reshape(-1), self.conv_seg.bias.reshape(-1)]).detach()
+        """To run after loading weights It initializes the base distribution as
+        a gaussian around previous MAP solution."""
+        initial_z = torch.cat(
+            [self.conv_seg.weight.reshape(-1),
+             self.conv_seg.bias.reshape(-1)]).detach()
         if self.density_estimation.density_type in ('flow', 'cflow'):
-            self.density_estimation.z0_mean = nn.Parameter(initial_z.data, requires_grad=False)
+            self.density_estimation.z0_mean = nn.Parameter(
+                initial_z.data, requires_grad=False)
             self.density_estimation.base_dist = tdist.MultivariateNormal(
                 self.density_estimation.z0_mean,
                 self.density_estimation.z0_lvar.exp().diag())
 
-        elif self.density_estimation.density_type in ('full_normal', 'fact_normal'):
+        elif self.density_estimation.density_type in ('full_normal',
+                                                      'fact_normal'):
             self.density_estimation.mu.data = initial_z.data
         else:
             raise NotImplementedError
@@ -365,31 +378,35 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
         if self.density_estimation.density_type == 'conditional_flow':
             seg_label = seg_label.squeeze(1)
         else:
-            seg_label = seg_label.squeeze(1).repeat(self.vi_nsamples_train, 1, 1)
+            seg_label = seg_label.squeeze(1).repeat(self.vi_nsamples_train, 1,
+                                                    1)
 
         if not isinstance(self.loss_decode, nn.ModuleList):
             losses_decode = [self.loss_decode]
         else:
             losses_decode = self.loss_decode
 
-        loss['acc_seg'] = accuracy(seg_logit, seg_label, ignore_index=self.ignore_index)
+        loss['acc_seg'] = accuracy(
+            seg_logit, seg_label, ignore_index=self.ignore_index)
 
         for loss_decode in losses_decode:
             if loss_decode.loss_name not in loss:
                 # NLL
                 if self.kl_weight == 'step':
-                    kl_weight = float(min(1., self.epoch_num / self.total_epochs))
+                    kl_weight = float(
+                        min(1., self.epoch_num / self.total_epochs))
                 else:
-                    assert isinstance(self.kl_weight, float), "Invalid KL weights"
+                    assert isinstance(self.kl_weight,
+                                      float), 'Invalid KL weights'
                     kl_weight = self.kl_weight
-                loss[loss_decode.loss_name] = loss_decode(seg_logit, seg_label, ignore_index=self.ignore_index)
+                loss[loss_decode.loss_name] = loss_decode(
+                    seg_logit, seg_label, ignore_index=self.ignore_index)
                 loss['loss_kld'] = kl_weight * kl
                 self.kl_weights.append(kl_weight)
                 self.kl_vals.append(kl.item())
-                if loss_decode.loss_name.startswith("loss_edl"):
+                if loss_decode.loss_name.startswith('loss_edl'):
                     # load
-                    logs = loss_decode.get_logs(seg_logit,
-                                                seg_label,
+                    logs = loss_decode.get_logs(seg_logit, seg_label,
                                                 self.ignore_index)
                     loss.update(logs)
             else:
@@ -398,41 +415,67 @@ class BllBaseDecodeHead(BaseModule, metaclass=ABCMeta):
                     seg_label,
                     weight=seg_weight,
                     ignore_index=self.ignore_index)
-                if loss_decode.loss_name.startswith("loss_edl"):
+                if loss_decode.loss_name.startswith('loss_edl'):
                     raise NotImplementedError
         return loss
 
 
 class DensityEstimation(nn.Module):
+
     def __init__(self, dim, density_type='flow', **kwargs):
         super(DensityEstimation, self).__init__()
-        if density_type not in ('flow', 'conditional_flow', 'full_normal', 'fact_normal'):
+        if density_type not in ('flow', 'conditional_flow', 'full_normal',
+                                'fact_normal'):
             raise NotImplementedError
         self.dim = dim
         self.density_type = density_type
         if density_type == 'flow':
             self.flow_length = kwargs.pop('flow_length', 2)
-            self.multi_scale_masks = [torch.ones(self.dim, dtype=torch.bool) for _ in range(self.flow_length)]
+            self.multi_scale_masks = [
+                torch.ones(self.dim, dtype=torch.bool)
+                for _ in range(self.flow_length)
+            ]
             self.flow_type = kwargs.pop('flow_type', 'planar_flow')
             self.use_bn = kwargs.pop('use_bn', False)
             # Base gaussian distribution
-            self.z0_mean = nn.Parameter(torch.zeros(self.dim), requires_grad=False)
-            self.z0_lvar = nn.Parameter(torch.zeros(self.dim), requires_grad=False)
+            self.z0_mean = nn.Parameter(
+                torch.zeros(self.dim), requires_grad=False)
+            self.z0_lvar = nn.Parameter(
+                torch.zeros(self.dim), requires_grad=False)
             # build the flow sequence
             if self.flow_type == 'radial_flow':
-                transforms = [Radial(input_dim=self.dim) for _ in range(self.flow_length)]
+                transforms = [
+                    Radial(input_dim=self.dim) for _ in range(self.flow_length)
+                ]
             elif self.flow_type == 'planar_flow':
-                transforms = [Planar(input_dim=self.dim) for _ in range(self.flow_length)]
+                transforms = [
+                    Planar(input_dim=self.dim) for _ in range(self.flow_length)
+                ]
             elif self.flow_type == 'sylvester_flow':
-                transforms = [Sylvester(input_dim=self.dim, count_transforms=8) for _ in range(self.flow_length)]
+                transforms = [
+                    Sylvester(input_dim=self.dim, count_transforms=8)
+                    for _ in range(self.flow_length)
+                ]
             elif self.flow_type == 'householder_flow':
-                transforms = [Householder(input_dim=self.dim) for _ in range(self.flow_length)]
+                transforms = [
+                    Householder(input_dim=self.dim)
+                    for _ in range(self.flow_length)
+                ]
             elif self.flow_type == 'naf_flow':
                 # Custom params:
-                # transforms = [neural_autoregressive(input_dim=self.dim, hidden_dims=[3 * self.dim + 1] * self.flow_length, width=24) for i in range(self.flow_length)]
+                # transforms = [
+                #     neural_autoregressive(
+                #     input_dim=self.dim,
+                #     hidden_dims=[3 * self.dim + 1] * self.flow_length,
+                #     width=24)
+                #     for i in range(self.flow_length)
+                #     ]
 
                 # Defaults:
-                transforms = [neural_autoregressive(input_dim=self.dim) for _ in range(self.flow_length)]
+                transforms = [
+                    neural_autoregressive(input_dim=self.dim)
+                    for _ in range(self.flow_length)
+                ]
 
                 # Use a multiscale-architecture (RealNVP style):
                 # r = 2
@@ -440,14 +483,27 @@ class DensityEstimation(nn.Module):
                 # for step in range(self.flow_length):
                 #     self.multi_scale_masks[step][current_dims:] = False
                 #     current_dims //= r
-                # transforms = [neural_autoregressive(input_dim=int(mask.sum())) for mask in self.multi_scale_masks]
+                # transforms = [
+                #     neural_autoregressive(input_dim=int(mask.sum()))
+                #     for mask in self.multi_scale_masks
+                #     ]
 
             elif self.flow_type == 'bnaf_flow':
                 raise NotImplementedError
 
             elif self.flow_type == 'polynomial_flow':
-                # transforms = [polynomial(input_dim=self.dim, hidden_dims=[10 * self.dim for _ in range(self.flow_length)])]
-                transforms = [polynomial(input_dim=self.dim) for _ in range(self.flow_length)]
+                # transforms = [
+                #     polynomial(input_dim=self.dim,
+                #                hidden_dims=[
+                #                    10 * self.dim
+                #                    for _ in range(self.flow_length)
+                #                ]
+                #                )
+                # ]
+                transforms = [
+                    polynomial(input_dim=self.dim)
+                    for _ in range(self.flow_length)
+                ]
             else:
                 raise NotImplementedError
 
@@ -459,29 +515,53 @@ class DensityEstimation(nn.Module):
                 for i in bn_indices:
                     transforms.insert(i, BatchNorm(input_dim=self.dim))
             self.flow = nn.ModuleList(transforms)
-            self.base_density = tdist.MultivariateNormal(loc=self.z0_mean, covariance_matrix=self.z0_lvar.exp().diag())
-            self.prior_density = tdist.MultivariateNormal(loc=torch.zeros(self.dim), covariance_matrix=torch.ones(self.dim).diag())
+            self.base_density = tdist.MultivariateNormal(
+                loc=self.z0_mean, covariance_matrix=self.z0_lvar.exp().diag())
+            self.prior_density = tdist.MultivariateNormal(
+                loc=torch.zeros(self.dim),
+                covariance_matrix=torch.ones(self.dim).diag())
         elif density_type == 'conditional_flow':
             self.feat_dims = kwargs.pop('feat_dims', 512)
             self.flow_length = kwargs.pop('flow_length', 2)
             self.flow_type = kwargs.pop('flow_type', 'cradial_flow')
             self.use_bn = kwargs.pop('use_bn', False)
             # Base gaussian distribution
-            self.z0_mean = nn.Parameter(torch.zeros(self.dim), requires_grad=False)
-            self.z0_lvar = nn.Parameter(torch.zeros(self.dim), requires_grad=False)
+            self.z0_mean = nn.Parameter(
+                torch.zeros(self.dim), requires_grad=False)
+            self.z0_lvar = nn.Parameter(
+                torch.zeros(self.dim), requires_grad=False)
             # build the flow sequence
             if self.flow_type == 'conditional_radial_flow':
-                transforms = [ConditionalRadial(DenseNN(self.feat_dims, [self.feat_dims, self.feat_dims], [self.dim, 1, 1]))
-                              for _ in range(self.flow_length)]
+                transforms = [
+                    ConditionalRadial(
+                        DenseNN(self.feat_dims,
+                                [self.feat_dims, self.feat_dims],
+                                [self.dim, 1, 1]))
+                    for _ in range(self.flow_length)
+                ]
             elif self.flow_type == 'conditional_planar_flow':
-                transforms = [ConditionalPlanar(DenseNN(self.feat_dims, [self.feat_dims, self.feat_dims], [self.dim, 1, 1]))
-                              for _ in range(self.flow_length)]
+                transforms = [
+                    ConditionalPlanar(
+                        DenseNN(self.feat_dims,
+                                [self.feat_dims, self.feat_dims],
+                                [self.dim, 1, 1]))
+                    for _ in range(self.flow_length)
+                ]
             elif self.flow_type == 'conditional_householder_flow':
-                transforms = [ConditionalHouseholder(DenseNN(self.feat_dims, [self.feat_dims, self.feat_dims], [self.dim, 1, 1]))
-                              for _ in range(self.flow_length)]
-            
+                transforms = [
+                    ConditionalHouseholder(
+                        DenseNN(self.feat_dims,
+                                [self.feat_dims, self.feat_dims],
+                                [self.dim, 1, 1]))
+                    for _ in range(self.flow_length)
+                ]
+
             elif self.flow_type == 'conditional_naf_flow':
-                transforms = [conditional_neural_autoregressive(input_dim=self.dim, context_dim=self.feat_dims) for _ in range(self.flow_length)]
+                transforms = [
+                    conditional_neural_autoregressive(
+                        input_dim=self.dim, context_dim=self.feat_dims)
+                    for _ in range(self.flow_length)
+                ]
             else:
                 raise NotImplementedError
             if self.use_bn:
@@ -492,38 +572,52 @@ class DensityEstimation(nn.Module):
                 for i in bn_indices:
                     transforms.insert(i, BatchNorm(input_dim=self.dim))
             self.flow = nn.ModuleList(transforms)
-            self.base_density = tdist.MultivariateNormal(loc=self.z0_mean, covariance_matrix=self.z0_lvar.exp().diag())
-            self.prior_density = tdist.MultivariateNormal(loc=torch.zeros(self.dim), covariance_matrix=torch.ones(self.dim).diag())
+            self.base_density = tdist.MultivariateNormal(
+                loc=self.z0_mean, covariance_matrix=self.z0_lvar.exp().diag())
+            self.prior_density = tdist.MultivariateNormal(
+                loc=torch.zeros(self.dim),
+                covariance_matrix=torch.ones(self.dim).diag())
         elif self.density_type == 'full_normal':
             # Reparametrization distribution N(0, I)
-            self.z0_mean = nn.Parameter(torch.zeros(self.dim), requires_grad=False)
-            self.z0_lvar = nn.Parameter(torch.zeros(self.dim), requires_grad=False)
+            self.z0_mean = nn.Parameter(
+                torch.zeros(self.dim), requires_grad=False)
+            self.z0_lvar = nn.Parameter(
+                torch.zeros(self.dim), requires_grad=False)
             # Target distribution parameters
             self.mu = nn.Parameter(torch.zeros(self.dim), requires_grad=True)
             cov_numel = int(self.dim * (self.dim + 1) / 2)
-            self.L_diag_elements = nn.Parameter(torch.ones(self.dim), requires_grad=True)
-            self.L_udiag_elements = nn.Parameter(torch.ones(cov_numel - self.dim) * 1e-5, requires_grad=True)
+            self.L_diag_elements = nn.Parameter(
+                torch.ones(self.dim), requires_grad=True)
+            self.L_udiag_elements = nn.Parameter(
+                torch.ones(cov_numel - self.dim) * 1e-5, requires_grad=True)
         elif self.density_type == 'fact_normal':
             # Reparametrization distribution N(0, I)
-            self.z0_mean = nn.Parameter(torch.zeros(self.dim), requires_grad=False)
-            self.z0_lvar = nn.Parameter(torch.zeros(self.dim), requires_grad=False)
+            self.z0_mean = nn.Parameter(
+                torch.zeros(self.dim), requires_grad=False)
+            self.z0_lvar = nn.Parameter(
+                torch.zeros(self.dim), requires_grad=False)
             # Target distribution parameters
             self.mu = nn.Parameter(torch.zeros(self.dim), requires_grad=True)
             cov_numel = int(self.dim)
-            self.L_diag_elements = nn.Parameter(torch.ones(int(cov_numel)), requires_grad=True)
+            self.L_diag_elements = nn.Parameter(
+                torch.ones(int(cov_numel)), requires_grad=True)
         else:
             raise NotImplementedError
 
     def tdist_to_device(self):
         device = next(self.parameters()).device
-        if hasattr(self, "base_density"):
-            base_mean, base_cov = self.base_density.loc, self.base_density.covariance_matrix
+        if hasattr(self, 'base_density'):
+            base_mean = self.base_density.loc
+            base_cov = self.base_density.covariance_matrix
             base_mean, base_cov = base_mean.to(device), base_cov.to(device)
-            self.base_density = tdist.MultivariateNormal(loc=base_mean, covariance_matrix=base_cov)
-        if hasattr(self, "prior_density"):
-            prior_mean, prior_cov = self.prior_density.loc, self.prior_density.covariance_matrix
+            self.base_density = tdist.MultivariateNormal(
+                loc=base_mean, covariance_matrix=base_cov)
+        if hasattr(self, 'prior_density'):
+            prior_mean = self.prior_density.loc
+            prior_cov = self.prior_density.covariance_matrix
             prior_mean, prior_cov = prior_mean.to(device), prior_cov.to(device)
-            self.prior_density = tdist.MultivariateNormal(loc=prior_mean, covariance_matrix=prior_cov)
+            self.prior_density = tdist.MultivariateNormal(
+                loc=prior_mean, covariance_matrix=prior_cov)
 
     def forward_normal(self, z, L):
         """
@@ -533,7 +627,8 @@ class DensityEstimation(nn.Module):
             L: Lower triangular matrix or diagonal
         """
         if self.density_type == 'full_normal':
-            assert self.L_diag_elements.numel() + self.L_udiag_elements.numel() == int(self.dim * (self.dim + 1) / 2)
+            assert self.L_diag_elements.numel() + self.L_udiag_elements.numel(
+            ) == int(self.dim * (self.dim + 1) / 2)
             self._check_positive_definite(L)
             z = self.mu + z @ L
         elif self.density_type == 'fact_normal':
@@ -544,8 +639,7 @@ class DensityEstimation(nn.Module):
         return z
 
     def forward_flow(self, x, feats=None):
-        """
-        Forward pass.
+        """Forward pass.
 
         Args:
             x: input tensor (B x D).
@@ -563,7 +657,10 @@ class DensityEstimation(nn.Module):
                 inc = curr_flow_step.log_abs_det_jacobian(x, x_next)
                 x = x_next
             elif isinstance(self.flow[i], TransformModule):
-                x_next = torch.cat((self.flow[i](x[:, self.multi_scale_masks[i]]), x[:, ~self.multi_scale_masks[i]]), dim=-1)
+                x_next = torch.cat(
+                    (self.flow[i](x[:, self.multi_scale_masks[i]]),
+                     x[:, ~self.multi_scale_masks[i]]),
+                    dim=-1)
                 assert torch.isfinite(x_next).all()
                 inc = self.flow[i].log_abs_det_jacobian(x, x_next)
                 assert torch.isfinite(inc).all()
@@ -585,8 +682,9 @@ class DensityEstimation(nn.Module):
 
     def flow_kl_loss(self, z0, zk, ldjs):
         bs = z0.size(0)
-        kl = self.base_density.log_prob(z0) - ldjs - self.prior_density.log_prob(zk)
-        assert kl.numel() == bs, "KL term has a shape problem before averaging"
+        kl = self.base_density.log_prob(
+            z0) - ldjs - self.prior_density.log_prob(zk)
+        assert kl.numel() == bs, 'KL term has a shape problem before averaging'
         return kl.mean()
 
     def flow_kl_loss_analytical(self, log_det):
@@ -600,14 +698,16 @@ class DensityEstimation(nn.Module):
         """
         lvar = self.z0_lvar.unsqueeze(0)
         mean = self.z0_mean.unsqueeze(0)
-        kl = -.5 * torch.sum(1. + lvar - mean.pow(2) - lvar.exp(), dim=1, keepdim=True)
+        kl = -.5 * torch.sum(
+            1. + lvar - mean.pow(2) - lvar.exp(), dim=1, keepdim=True)
         return (kl - log_det).mean()
 
     def normal_kl_loss(self, L):
         # computed in closed form
-        # https://stats.stackexchange.com/questions/60680/kl-divergence-between-two-multivariate-gaussians
+        # https://stats.stackexchange.com/questions/60680/kl-divergence-between-two-multivariate-gaussians # noqa
         self._check_positive_definite(L)
-        kl = 0.5 * (-self._ldet_normal_cov(L) - self.dim + self._normal_cov(L).trace() + self.mu.t()  @ self.mu)
+        kl = 0.5 * (-self._ldet_normal_cov(L) - self.dim +
+                    self._normal_cov(L).trace() + self.mu.t() @ self.mu)
         return kl
 
     def _normal_cov(self, L):
@@ -623,21 +723,22 @@ class DensityEstimation(nn.Module):
         return 2 * (L.diag().log().sum() + 1e-6)
 
     def _check_positive_definite(self, L):
-        # https://math.stackexchange.com/questions/462682/why-does-the-cholesky-decomposition-requires-a-positive-definite-matrix
+        # https://math.stackexchange.com/questions/462682/why-does-the-cholesky-decomposition-requires-a-positive-definite-matrix # noqa
         if not (L.diag() > 0).all():
-            import ipdb; ipdb.set_trace()
+            import ipdb
+            ipdb.set_trace()
 
-    @ property
+    @property
     def _L(self):
-        """
-        Reconstructs Lower Triangular Matrix
-        """
+        """Reconstructs Lower Triangular Matrix."""
         full = True if self.density_type.startswith('full') else False
         device = next(self.parameters()).device
         assert self.L_diag_elements.numel() == self.dim
-        L = F.softplus(self.L_diag_elements).diag() + 1e-05 * torch.eye(self.dim).to(device)
+        L = F.softplus(self.L_diag_elements).diag() + 1e-05 * torch.eye(
+            self.dim).to(device)
         if full:
-            assert self.L_udiag_elements.numel() == int(self.dim * (self.dim - 1) / 2)
+            assert self.L_udiag_elements.numel() == int(self.dim *
+                                                        (self.dim - 1) / 2)
             udiag_idx = torch.tril_indices(self.dim, self.dim, -1).to(device)
             L[udiag_idx[0, :], udiag_idx[1, :]] = self.L_udiag_elements
         return L
@@ -656,8 +757,8 @@ def log_normal_standard(x, average=False, reduce=True, dim=None):
 
 
 def log_normal_diag(x, mean, log_var, average=False, reduce=True, dim=None):
-    # log_norm = -0.5 * (log_var + (x - mean) * (x - mean) * (-log_var).exp())
-    log_norm = 0.5 * (-(x - mean) ** 2) * (-log_var).exp() - log_var - 2 * math.log(math.sqrt(2 * math.pi))
+    log_norm = 0.5 * (-(x - mean)**2) * (
+        -log_var).exp() - log_var - 2 * math.log(math.sqrt(2 * math.pi))
 
     if reduce:
         if average:

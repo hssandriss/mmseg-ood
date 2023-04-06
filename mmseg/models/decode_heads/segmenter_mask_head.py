@@ -9,8 +9,8 @@ from mmcv.runner import ModuleList
 
 from mmseg.models.backbones.vit import TransformerEncoderLayer
 from ..builder import HEADS
-from .decode_head import BaseDecodeHead
 from .bll_decode_head import BllBaseDecodeHead
+from .decode_head import BaseDecodeHead
 
 
 @HEADS.register_module()
@@ -120,7 +120,7 @@ class SegmenterMaskTransformerHead(BaseDecodeHead):
         for layer in self.layers:
             x = layer(x)
         x = self.decoder_norm(x)
-        #  TODO: checkout the possibility of using this for bll and self-distillation
+
         patches = self.patch_proj(x[:, :-self.num_classes])
         cls_seg_feat = self.classes_proj(x[:, -self.num_classes:])
 
@@ -132,7 +132,6 @@ class SegmenterMaskTransformerHead(BaseDecodeHead):
         masks = masks.permute(0, 2, 1).contiguous().view(b, -1, h, w)
 
         return masks
-
 
 
 @HEADS.register_module()
@@ -219,19 +218,21 @@ class SegmenterMaskTransformerBllHead(BllBaseDecodeHead):
 
         self.init_std = init_std
 
-        self.patch_proj_w_shape =  self.patch_proj.weight.shape
-        # self.classes_proj_shape =  self.classes_proj.weight.shape
-        # self.patch_proj_w_numel, self.classes_proj_w_numel = self.patch_proj.weight.numel(), self.classes_proj.weight.numel()
-        self.patch_proj_w_numel = self.patch_proj.weight.numel()
-        # self.ll_param_numel = self.patch_proj_w_numel+ self.classes_proj_w_numel
-        self.ll_param_numel = self.patch_proj_w_numel+ self.patch_proj_w_numel
-        self.density_estimation_to_params = nn.Linear(self.vi_latent_dim, self.ll_param_numel, bias=False)
+        self.patch_proj_w_shape = self.patch_proj.weight.shape
+        self.classes_proj_shape = self.classes_proj.weight.shape
+        self.patch_proj_numel = self.patch_proj.weight.numel()
+        # self.classes_proj_numel = self.classes_proj.weight.numel()
+
+        # self.ll_param_numel = self.patch_proj_numel + self.classes_proj_numel
+        self.ll_param_numel = self.patch_proj_numel
+
+        self.density_estimation_to_params = nn.Linear(
+            self.vi_latent_dim, self.ll_param_numel, bias=False)
         self.build_density_estimator()
         delattr(self, 'conv_seg')
         delattr(self, 'patch_proj')
         # delattr(self, 'classes_proj')
 
-        
     def init_weights(self):
         trunc_normal_(self.cls_emb, std=self.init_std)
         # trunc_normal_init(self.patch_proj, std=self.init_std)
@@ -254,27 +255,30 @@ class SegmenterMaskTransformerBllHead(BllBaseDecodeHead):
             for layer in self.layers:
                 x = layer(x)
             x = self.decoder_norm(x)
-            #  TODO: checkout the possibility of using this for bll and self-distillation
-        input_dims =( b, c, h, w)
+        input_dims = (b, c, h, w)
         if nsamples == 1 and self.density_type == 'flow':
             z0 = self.density_estimation.sample_base(1)
-            zk, sum_log_jacobians = self.density_estimation.forward_flow(z0, None)
-            kl = - sum_log_jacobians.mean()
+            zk, sum_log_jacobians = self.density_estimation.forward_flow(
+                z0, None)
+            kl = -sum_log_jacobians.mean()
             output = self.seg_forward(x, zk, input_dims)
             return output, kl
         elif nsamples > 1 and self.density_type == 'flow':
             z0 = self.density_estimation.sample_base(nsamples)
             zk, sum_log_jacobians = self.density_estimation.forward_flow(z0)
-            kl = self.density_estimation.flow_kl_loss(z0, zk, sum_log_jacobians)
+            kl = self.density_estimation.flow_kl_loss(z0, zk,
+                                                      sum_log_jacobians)
             output = self.seg_forward_x(x, zk, input_dims)
             return output, kl
-        elif nsamples == 1 and self.density_type in ('full_normal', 'fact_normal'):
+        elif nsamples == 1 and self.density_type in ('full_normal',
+                                                     'fact_normal'):
             L = self.density_estimation._L
             zk = self.density_estimation.mu.data.unsqueeze(0)
             kl = self.density_estimation.normal_kl_loss(L)
             output = self.seg_forward(x, zk, input_dims)
             return output, kl
-        elif nsamples > 1 and self.density_type in ('full_normal', 'fact_normal'):
+        elif nsamples > 1 and self.density_type in ('full_normal',
+                                                    'fact_normal'):
             L = self.density_estimation._L
             z0 = self.density_estimation.sample_base(nsamples)
             zk = self.density_estimation.forward_normal(z0, L)
@@ -287,7 +291,6 @@ class SegmenterMaskTransformerBllHead(BllBaseDecodeHead):
             raise NotImplementedError
         else:
             raise NotImplementedError
-        
 
     def seg_forward_x(self, feats, z, input_dims):
         # Results into bs = feats.size(0)*z.size(0)
@@ -303,11 +306,14 @@ class SegmenterMaskTransformerBllHead(BllBaseDecodeHead):
         for z_ in z_list:
             if self.dropout and self.dropout.training:
                 feats = self.dropout(feats)
-            z_ = z_.squeeze()
-            self.patch_proj_w = z_[:self.patch_proj_w_numel].reshape(self.patch_proj_w_shape) 
-            # self.classes_proj_w  = z_[self.patch_proj_w_numel:].reshape(self.classes_proj_shape)
-            patches = F.linear(feats[:, :-self.num_classes], self.patch_proj_w, None)
-            # cls_seg_feat = F.linear(feats[:, -self.num_classes:], self.classes_proj_w, None) 
+            self.patch_proj_w = z_.squeeze().reshape(self.patch_proj_w_shape)
+            # self.classes_proj_w  = z_[self.patch_proj_numel:].reshape(
+            #     self.classes_proj_shape)
+            patches = F.linear(feats[:, :-self.num_classes], self.patch_proj_w,
+                               None)
+
+            # cls_seg_feat = F.linear(feats[:, -self.num_classes:],
+            #                         self.classes_proj_w, None)
             cls_seg_feat = self.classes_proj(feats[:, -self.num_classes:])
 
             patches = F.normalize(patches, dim=2, p=2)
@@ -335,12 +341,16 @@ class SegmenterMaskTransformerBllHead(BllBaseDecodeHead):
             if self.dropout and self.dropout.training:
                 x_ = self.dropout(x_)
             z_ = z_.squeeze()
-            self.patch_proj_w = z_[:self.patch_proj_w_numel].reshape(self.patch_proj_w_shape) 
-            # self.classes_proj_w  = z_[self.patch_proj_w_numel:].reshape(self.classes_proj_shape)
-            patches = F.linear(x_[:, :-self.num_classes], self.patch_proj_w, None)
-            # cls_seg_feat = F.linear(x_[:, -self.num_classes:], self.classes_proj_w, None) 
+            self.patch_proj_w = z_[:self.patch_proj_numel].reshape(
+                self.patch_proj_w_shape)
+            # self.classes_proj_w  = x_[self.patch_proj_numel:].reshape(
+            #     self.classes_proj_shape)
+            patches = F.linear(x_[:, :-self.num_classes], self.patch_proj_w,
+                               None)
+            # cls_seg_feat = F.linear(x_[:, -self.num_classes:],
+            #                         self.classes_proj_w, None)
             cls_seg_feat = self.classes_proj(x_[:, -self.num_classes:])
-            
+
             patches = F.normalize(patches, dim=2, p=2)
             cls_seg_feat = F.normalize(cls_seg_feat, dim=2, p=2)
             masks = patches @ cls_seg_feat.transpose(1, 2)
@@ -349,4 +359,3 @@ class SegmenterMaskTransformerBllHead(BllBaseDecodeHead):
             output.append(masks)
         assert len(output) == z.size(0)
         return torch.cat(output, dim=0)
-    

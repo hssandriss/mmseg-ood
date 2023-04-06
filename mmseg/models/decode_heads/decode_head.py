@@ -4,13 +4,13 @@ from abc import ABCMeta, abstractmethod
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from mmcv.runner import BaseModule, auto_fp16, force_fp32
 
 from mmseg.core import build_pixel_sampler
 from mmseg.ops import resize
 from ..builder import build_loss
 from ..losses import accuracy
-import torch.nn.functional as F
 
 
 class BaseDecodeHead(BaseModule, metaclass=ABCMeta):
@@ -291,22 +291,11 @@ class BaseDecodeHead(BaseModule, metaclass=ABCMeta):
         """
         return self.forward(inputs)
 
-    # def cls_seg(self, feat):
-    #     """Classify each pixel."""
-    #     output = []
-    #     self.dropout.train()
-    #     for _ in range(20):
-    #         feat_i = self.dropout(feat)
-    #         output.append(self.conv_seg(feat_i))
-    #     return torch.cat(output, dim=0)
-
     def cls_seg(self, feat):
         """Classify each pixel."""
         if self.dropout is not None:
             feat = self.dropout(feat)
         output = self.conv_seg(feat)
-        # norm= torch.norm(output.flatten(2, -1), dim=-1, p=2, keepdim=True).unsqueeze(-1)
-        # output = output / torch.max(norm, torch.ones_like(norm)*1e-6)
         return output
 
     @force_fp32(apply_to=('seg_logit', ))
@@ -337,63 +326,38 @@ class BaseDecodeHead(BaseModule, metaclass=ABCMeta):
             losses_decode = self.loss_decode
         if self.use_bags:
             # For computing accuracy
-            smp = torch.zeros_like(seg_logit[:, :-self.bags_kwargs["num_bags"], :, :])
-            for bag_idx in range(self.bags_kwargs["num_bags"]):
+            smp = torch.zeros_like(
+                seg_logit[:, :-self.bags_kwargs['num_bags'], :, :])
+            for bag_idx in range(self.bags_kwargs['num_bags']):
                 cp_seg_logit = seg_logit.detach().clone()
-                bag_seg_logit = cp_seg_logit[:, self.bags_kwargs["bag_masks"][bag_idx], :, :]
+                bag_seg_logit = cp_seg_logit[:, self.bags_kwargs['bag_masks']
+                                             [bag_idx], :, :]
                 # ignores other after softmax
                 bag_smp = F.softmax(bag_seg_logit, dim=1)[:, :-1, :, :]
                 # orig_indices = self.bags_classes[bag_idx][:-1]
-                mask = self.bags_kwargs["bag_masks"][bag_idx][:-self.bags_kwargs["num_bags"]]
+                mask = self.bags_kwargs['bag_masks'][
+                    bag_idx][:-self.bags_kwargs['num_bags']]
                 smp[:, mask, :, :] = bag_smp
-            loss['acc_seg'] = accuracy(smp, seg_label, ignore_index=self.ignore_index)
+            loss['acc_seg'] = accuracy(
+                smp, seg_label, ignore_index=self.ignore_index)
         else:
-            loss['acc_seg'] = accuracy(seg_logit, seg_label, ignore_index=self.ignore_index)
+            loss['acc_seg'] = accuracy(
+                seg_logit, seg_label, ignore_index=self.ignore_index)
 
         for loss_decode in losses_decode:
             if loss_decode.loss_name not in loss:
                 if self.use_bags:
-                    # Compute loss using bags only implemented for CE and LDAM
-                    loss_bags = []
-                    for bag_idx in range(self.bags_kwargs["num_bags"]):
-                        bag_seg_logit = seg_logit[:, self.bags_kwargs["bag_masks"][bag_idx], :, :]
-                        bag_seg_label = seg_label
-                        for c in range(self.num_classes - self.bags_kwargs["num_bags"]):
-                            remapped_index = self.bags_kwargs["bags_classes"][bag_idx].index(self.bags_kwargs["bag_label_maps"][bag_idx][c])
-                            # bag_seg_label[bag_seg_label == c] = remapped_index # throws a cuda error
-                            bag_seg_label = torch.where(bag_seg_label != c, bag_seg_label, remapped_index)
-                        if loss_decode.loss_name.endswith("ldam"):
-                            loss_bag = loss_decode(
-                                bag_seg_logit,
-                                bag_seg_label,
-                                weight=seg_weight,
-                                ignore_index=self.ignore_index,
-                                bag_idx=bag_idx)
-                        elif loss_decode.loss_name.startswith("loss_edl"):
-                            raise NotImplementedError
-                        else:
-                            loss_bag = loss_decode(
-                                bag_seg_logit,
-                                bag_seg_label,
-                                weight=seg_weight,
-                                ignore_index=self.ignore_index)
-                        loss[loss_decode.loss_name.replace("loss", "L") + f"_bag_{bag_idx}"] = loss_bag.detach()
-                        loss_bags.append(loss_bag)
-
-                    loss[loss_decode.loss_name] = sum(loss_bags)
+                    raise NotImplementedError
                 else:
                     loss[loss_decode.loss_name] = loss_decode(
                         seg_logit,
                         seg_label,
                         weight=seg_weight,
                         ignore_index=self.ignore_index)
-                    if loss_decode.loss_name.startswith("loss_edl"):
-                        # For dist training ensure that all log values are in tensors and loaded in cuda
-                        logs = loss_decode.get_logs(seg_logit,
-                                                    seg_label,
+                    if loss_decode.loss_name.startswith('loss_edl'):
+                        logs = loss_decode.get_logs(seg_logit, seg_label,
                                                     self.ignore_index)
                         loss.update(logs)
-                        pass
             else:
                 if self.use_bags:
                     raise NotImplementedError
@@ -403,7 +367,7 @@ class BaseDecodeHead(BaseModule, metaclass=ABCMeta):
                         seg_label,
                         weight=seg_weight,
                         ignore_index=self.ignore_index)
-                    if loss_decode.loss_name.startswith("loss_edl"):
+                    if loss_decode.loss_name.startswith('loss_edl'):
                         raise NotImplementedError
 
         return loss

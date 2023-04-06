@@ -6,6 +6,7 @@ import os.path as osp
 import time
 import warnings
 from datetime import datetime
+
 import mmcv
 import torch
 import torch.distributed as dist
@@ -82,10 +83,15 @@ def parse_args():
         'Note that the quotation marks are necessary and that no white space '
         'is allowed.')
     parser.add_argument(
-        '--experiment-tag', '--tag', type=str, default='',
-        help="Extra tag to characterize the experiment (modified hyperparams...)"
-    )
-    parser.add_argument("--use-bags", action='store_true', help='determines weather to use bags of predictors')
+        '--experiment-tag',
+        '--tag',
+        type=str,
+        default='',
+        help='Extra tag to characterize the experiment')
+    parser.add_argument(
+        '--use-bags',
+        action='store_true',
+        help='determines weather to use bags of predictors')
     parser.add_argument(
         '--launcher',
         choices=['none', 'pytorch', 'slurm', 'mpi'],
@@ -150,8 +156,11 @@ def main():
         cfg.work_dir = args.work_dir
     elif cfg.get('work_dir', None) is None:
         # use config filename as default work_dir if cfg.work_dir is None
-        cfg.work_dir = osp.join('./work_dirs', "_".join([osp.splitext(osp.basename(args.config))
-                                [0], datetime.now().strftime("%Y%m%d%H%M%S"), args.experiment_tag]))
+        cfg.work_dir = osp.join(
+            './work_dirs', '_'.join([
+                osp.splitext(osp.basename(args.config))[0],
+                datetime.now().strftime('%Y%m%d%H%M%S'), args.experiment_tag
+            ]))
     if args.load_from is not None:
         cfg.load_from = args.load_from
     if args.resume_from is not None:
@@ -240,7 +249,8 @@ def main():
         datasets[0].get_bags()
         cfg.model.decode_head.num_classes += datasets[0].num_bags
     if cfg.model.decode_head.loss_decode.type == 'EDLLoss':
-        cfg.model.decode_head.loss_decode['total_epochs'] = cfg.runner.max_epochs
+        cfg.model.decode_head.loss_decode[
+            'total_epochs'] = cfg.runner.max_epochs
     model = build_segmentor(
         cfg.model,
         train_cfg=cfg.get('train_cfg'),
@@ -261,9 +271,9 @@ def main():
     model.CLASSES = datasets[0].CLASSES
     # passing checkpoint meta for saving best checkpoint
     meta.update(cfg.checkpoint_config.meta)
-    meta["freeze_features"] = args.freeze_features
-    meta["freeze_encoder"] = args.freeze_encoder
-    meta["init_not_frozen"] = args.init_not_frozen
+    meta['freeze_features'] = args.freeze_features
+    meta['freeze_encoder'] = args.freeze_encoder
+    meta['init_not_frozen'] = args.init_not_frozen
     train_segmentor(
         model,
         datasets,

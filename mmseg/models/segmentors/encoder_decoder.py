@@ -6,9 +6,10 @@ import torch.nn.functional as F
 from mmseg.core import add_prefix
 from mmseg.ops import resize
 from .. import builder
+from ..backbones import VisionTransformer
 from ..builder import SEGMENTORS
 from .base import BaseSegmentor
-from ..backbones import VisionTransformer
+
 
 @SEGMENTORS.register_module()
 class EncoderDecoder(BaseSegmentor):
@@ -266,25 +267,10 @@ class EncoderDecoder(BaseSegmentor):
         """Simple test with single image."""
         seg_logit = self.inference(img, img_meta, rescale)
         if self.decode_head.use_bags:
-            raw_logits = seg_logit[:, :-self.decode_head.bags_kwargs["num_bags"], :, :]
-            smp = torch.zeros_like(raw_logits)
-            is_other = torch.zeros_like(seg_logit[:, :self.decode_head.bags_kwargs["num_bags"], :, :])
-            for bag_idx in range(self.decode_head.bags_kwargs["num_bags"]):
-                cp_seg_logit = seg_logit.detach().clone()
-                bag_seg_logit = cp_seg_logit[:, self.decode_head.bags_kwargs["bag_masks"][bag_idx], :, :]
-                bag_smp = F.softmax(bag_seg_logit, dim=1)
-                oth_index = bag_smp.shape[1] - 1
-                is_other[:, bag_idx, :, :] = (bag_smp.argmax(dim=1) == oth_index)
-                bag_smp_no_other = bag_smp[:, :oth_index, :, :]
-                mask = self.decode_head.bags_kwargs["bag_masks"][bag_idx][:-self.decode_head.bags_kwargs["num_bags"]]
-                smp[:, mask, :, :] = bag_smp_no_other
-                # logits[:, mask, :, :] = bag_seg_logit_no_other
-
-            seg_pred_all_other = is_other.all(1, True)
-            seg_pred = smp.argmax(dim=1)
+            raise NotImplementedError
         else:
-            raw_logits = seg_logit
-            seg_pred = F.softmax(seg_logit, dim=1).argmax(dim=1)  # change here
+            # raw_logits = seg_logit
+            seg_pred = F.softmax(seg_logit, dim=1).argmax(dim=1)
         if torch.onnx.is_in_onnx_export():
             # our inference backend only support 4D output
             seg_pred = seg_pred.unsqueeze(0)
@@ -327,7 +313,8 @@ class EncoderDecoder(BaseSegmentor):
         return seg_pred
 
     def freeze_encoder(self):
-        if hasattr(self.backbone, "num_stages") and hasattr(self.backbone, "_freeze_stages"):
+        if hasattr(self.backbone, 'num_stages') and hasattr(
+                self.backbone, '_freeze_stages'):
             self.backbone.frozen_stages = self.backbone.num_stages
             self.backbone._freeze_stages()
         elif isinstance(self.backbone, VisionTransformer):
@@ -339,12 +326,13 @@ class EncoderDecoder(BaseSegmentor):
         to_eval(self, 'EncoderDecoder')
         filtered = []
         for name, param in self.named_parameters():
-            if 'conv_seg' not in name and 'loss_decode' not in name and 'density_estimation' not in name:
+            if (('conv_seg' not in name) and ('loss_decode' not in name)
+                    and ('density_estimation' not in name)):
                 param.requires_grad = False
-                print(name, "has gradient disabled")
+                print(name, 'has gradient disabled')
             else:
                 filtered.append(name)
-        print("Filtered:", filtered)
+        print('Filtered:', filtered)
         self.decode_head.frozen_features = True
 
     def freeze_decoder_except_density_estimation(self):
@@ -353,10 +341,10 @@ class EncoderDecoder(BaseSegmentor):
         for name, param in self.named_parameters():
             if 'loss_decode' not in name and 'density_estimation' not in name:
                 param.requires_grad = False
-                print(name, "has gradient disabled")
+                print(name, 'has gradient disabled')
             else:
                 filtered.append(name)
-        print("Filtered:", filtered)
+        print('Filtered:', filtered)
         self.decode_head.frozen_features = True
 
     def aug_test_logits(self, img, img_metas, rescale=True):
@@ -381,6 +369,6 @@ class EncoderDecoder(BaseSegmentor):
 def to_eval(module, module_key):
     if 'conv_seg' not in module_key and 'loss_decode' not in module_key:
         module.training = False
-        print(module_key, "is set to eval mode")
+        print(module_key, 'is set to eval mode')
     for child_key, child in module.named_children():
-        to_eval(child, module_key + "." + child_key)
+        to_eval(child, module_key + '.' + child_key)

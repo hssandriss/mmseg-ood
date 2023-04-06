@@ -1,28 +1,27 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import argparse
+import json
 import os
 import os.path as osp
+import re
 import shutil
 import time
 import warnings
-import numpy as np
-import pandas as pd
+
 import mmcv
+import pandas as pd
 import torch
 from mmcv.cnn.utils import revert_sync_batchnorm
 from mmcv.runner import (get_dist_info, init_dist, load_checkpoint,
                          wrap_fp16_model)
 from mmcv.utils import DictAction
-import matplotlib.pyplot as plt
+from torch.utils.tensorboard import SummaryWriter
+
 from mmseg import digit_version
 from mmseg.apis import multi_gpu_test, single_gpu_test
 from mmseg.datasets import build_dataloader, build_dataset
 from mmseg.models import build_segmentor
 from mmseg.utils import build_ddp, build_dp, get_device, setup_multi_processes
-from torch.utils.tensorboard import SummaryWriter
-import shutil
-import json
-import re
 
 
 def parse_args():
@@ -52,18 +51,25 @@ def parse_args():
     parser.add_argument('--show', action='store_true', help='show results')
     parser.add_argument(
         '--show-dir', help='directory where painted images will be saved')
-    parser.add_argument("--use-bags", action='store_true', help='determines weather to use bags of predictors')
-    parser.add_argument("--bags-mul", type=int, default=10, help='determines weather to use bags of predictors')
-    parser.add_argument("--all", action='store_true', help='determines weather to test all checkpoints')
+    parser.add_argument(
+        '--use-bags',
+        action='store_true',
+        help='determines weather to use bags of predictors')
+    parser.add_argument(
+        '--bags-mul',
+        type=int,
+        default=10,
+        help='determines weather to use bags of predictors')
+    parser.add_argument(
+        '--all',
+        action='store_true',
+        help='determines weather to test all checkpoints')
     parser.add_argument(
         '--gpu-collect',
         action='store_true',
         help='whether to use gpu to collect results.')
     parser.add_argument(
-        '--fusion',
-        choices=['af', 'wf'],
-        default='af',
-        help='job launcher')
+        '--fusion', choices=['af', 'wf'], default='af', help='job launcher')
     parser.add_argument(
         '--gpu-id',
         type=int,
@@ -132,7 +138,8 @@ def parse_args():
 
 
 def main():
-    import warnings; warnings.filterwarnings("ignore")
+    import warnings
+    warnings.filterwarnings('ignore')
     args = parse_args()
     # print(vars(args))
 
@@ -153,7 +160,7 @@ def main():
         cfg.merge_from_dict(args.cfg_options)
 
     fusion_method = args.fusion
-    
+
     # set multi-process settings
     setup_multi_processes(cfg)
 
@@ -168,7 +175,7 @@ def main():
     # random.seed(seed)
     # np.random.seed(seed)
     # torch.use_deterministic_algorithms(True)
-    
+
     if args.aug_test:
         # hard code index
         cfg.data.test.pipeline[1].img_ratios = [
@@ -246,47 +253,57 @@ def main():
     }
     # build the dataloader
     data_loader = build_dataloader(dataset, **test_loader_cfg)
-    all_checkpoints = [os.path.join(args.work_dir, file) for file in os.listdir(args.work_dir) if file.endswith(".pth") and file != "latest.pth"]
-    all_checkpoints.sort(key=lambda file: int(re.search(r"(?:epoch)_([0-9]+).(?:pth)$", osp.basename(file)).groups()[0]))
-    all_checkpoints_iter = [int(re.search(r"(?:epoch)_([0-9]+).(?:pth)$", osp.basename(file)).groups()[0]) for file in all_checkpoints]
-    
-    # indices_to_keep =  [i for i, x in enumerate(all_checkpoints_iter) if x%10==0]
+    all_checkpoints = [
+        os.path.join(args.work_dir, file) for file in os.listdir(args.work_dir)
+        if file.endswith('.pth') and file != 'latest.pth'
+    ]
+    all_checkpoints.sort(key=lambda file: int(
+        re.search(r'(?:epoch)_([0-9]+).(?:pth)$', osp.basename(file)).groups()[
+            0]))
+    all_checkpoints_iter = [
+        int(
+            re.search(r'(?:epoch)_([0-9]+).(?:pth)$',
+                      osp.basename(file)).groups()[0])
+        for file in all_checkpoints
+    ]
+
+    # indices_to_keep = [i for i, x in enumerate(all_checkpoints_iter)
+    #                    if not x % 10]
     # all_checkpoints = [all_checkpoints[i] for i in indices_to_keep]
     # all_checkpoints_iter = [all_checkpoints_iter[i] for i in indices_to_keep]
-    
-    reg_ood_summary = pd.DataFrame(
-        columns=["epoch", 'max_prob.auroc', 'max_prob.aupr', 'max_prob.fpr95', 'max_logit.auroc', 'max_logit.aupr',
-                 'max_logit.fpr95', 'emp_entropy.auroc', 'emp_entropy.aupr', 'emp_entropy.fpr95'])
-    sl_ood_summary = pd.DataFrame(columns=["epoch", 'u.auroc', 'u.aupr', 'u.fpr95', 'disonnance.auroc',
-                                           'disonnance.aupr', 'disonnance.fpr95', 'dir_entropy.auroc', 'dir_entropy.aupr', 'dir_entropy.fpr95'])
+
+    reg_ood_summary = pd.DataFrame(columns=[
+        'epoch', 'max_prob.auroc', 'max_prob.aupr', 'max_prob.fpr95',
+        'max_logit.auroc', 'max_logit.aupr', 'max_logit.fpr95',
+        'emp_entropy.auroc', 'emp_entropy.aupr', 'emp_entropy.fpr95'
+    ])
+    sl_ood_summary = pd.DataFrame(columns=[
+        'epoch', 'u.auroc', 'u.aupr', 'u.fpr95', 'disonnance.auroc',
+        'disonnance.aupr', 'disonnance.fpr95', 'dir_entropy.auroc',
+        'dir_entropy.aupr', 'dir_entropy.fpr95'
+    ])
 
     if not args.all:
-        index_last = max(range(len(all_checkpoints_iter)), key=all_checkpoints_iter.__getitem__)
+        index_last = max(
+            range(len(all_checkpoints_iter)),
+            key=all_checkpoints_iter.__getitem__)
         all_checkpoints = [all_checkpoints[index_last]]
         all_checkpoints_iter = [all_checkpoints_iter[index_last]]
     if args.all:
-        # clean previous test logs
-        # if osp.exists(os.path.join(args.work_dir, "tf_logs_test")):
-        #     shutil.rmtree(os.path.join(args.work_dir, "tf_logs_test"))
-        writer = SummaryWriter(log_dir=os.path.join(args.work_dir, "tf_logs_test"))
+        writer = SummaryWriter(
+            log_dir=os.path.join(args.work_dir, 'tf_logs_test'))
     ans = []
 
     for i, checkpoint in enumerate(all_checkpoints):
         # build the model and load checkpoint
         if args.show_dir:
-            args.show_dir = args.show_dir + f"_{all_checkpoints_iter[i]}"
+            args.show_dir = args.show_dir + f'_{all_checkpoints_iter[i]}'
         cfg.model.train_cfg = None
         model = build_segmentor(cfg.model, test_cfg=cfg.get('test_cfg'))
         fp16_cfg = cfg.get('fp16', None)
         if fp16_cfg is not None:
             wrap_fp16_model(model)
         checkpoint = load_checkpoint(model, checkpoint, map_location='cpu')
-        # import torch.nn as nn
-        # model.decode_head.conv_seg = nn.utils.weight_norm(
-        #     nn.Conv2d(model.decode_head.channels, model.decode_head.num_classes, kernel_size=1), "weight", dim=1)
-
-        # with torch.no_grad():
-        #     model.decode_head.conv_seg.weight.div_(torch.norm(model.decode_head.conv_seg.weight, dim=1, keepdim=True))
 
         if 'CLASSES' in checkpoint.get('meta', {}):
             model.CLASSES = checkpoint['meta']['CLASSES']
@@ -299,17 +316,18 @@ def main():
             print('"PALETTE" not found in meta, use dataset.PALETTE instead')
             model.PALETTE = dataset.PALETTE
         if args.use_bags:
-            setattr(model.decode_head, "use_bags", True)
-            setattr(model.decode_head, "bags_kwargs", dict(
-                num_bags=dataset.num_bags,
-                label2bag=dataset.label2bag,
-                bag_label_maps=dataset.bag_label_maps,
-                bag_masks=dataset.bag_masks,
-                bags_classes=dataset.bags_classes,
-                bag_class_counts=dataset.bag_class_counts
-            ))
+            setattr(model.decode_head, 'use_bags', True)
+            setattr(
+                model.decode_head, 'bags_kwargs',
+                dict(
+                    num_bags=dataset.num_bags,
+                    label2bag=dataset.label2bag,
+                    bag_label_maps=dataset.bag_label_maps,
+                    bag_masks=dataset.bag_masks,
+                    bags_classes=dataset.bags_classes,
+                    bag_class_counts=dataset.bag_class_counts))
         else:
-            setattr(model.decode_head, "use_bags", False)
+            setattr(model.decode_head, 'use_bags', False)
 
         # clean gpu memory when starting a new evaluation.
         torch.cuda.empty_cache()
@@ -319,9 +337,9 @@ def main():
         efficient_test = eval_kwargs.get('efficient_test', False)
         if efficient_test:
             warnings.warn(
-                '``efficient_test=True`` does not have effect in tools/test.py, '
-                'the evaluation and format results are CPU memory efficient by '
-                'default')
+                '``efficient_test=True`` does not have effect in '
+                'tools/test.py, the evaluation and format results are CPU '
+                'memory efficient by default')
 
         eval_on_format_results = (
             args.eval is not None and 'cityscapes' in args.eval)
@@ -346,8 +364,9 @@ def main():
                 'we convert SyncBN to BN. Please use dist_train.sh which can '
                 'avoid this error.')
             if not torch.cuda.is_available():
-                assert digit_version(mmcv.__version__) >= digit_version('1.4.4'), \
-                    'Please use MMCV >= 1.4.4 for CPU training!'
+                assert digit_version(mmcv.__version__) >= \
+                    digit_version('1.4.4'), 'Please use MMCV >= 1.4.4' \
+                                            ' for CPU training!'
             model = revert_sync_batchnorm(model)
             model = build_dp(model, cfg.device, device_ids=cfg.gpu_ids)
             results = single_gpu_test(
@@ -378,17 +397,13 @@ def main():
                 format_only=args.format_only or eval_on_format_results,
                 format_args=eval_kwargs)
 
-        # prev_map = torch.cat([model.module.decode_head.conv_seg.weight.reshape(-1), model.module.decode_head.conv_seg.bias.reshape(-1)]).detach().data
-        # curr_map = model.module.decode_head.density_estimation.z0_mean.data
-        # assert torch.eq(prev_map, curr_map).all(), 'the base dist mean does not coincide with previous MAP'
-
         rank, _ = get_dist_info()
         if rank == 0:
             if args.out:
                 warnings.warn(
-                    'The behavior of ``args.out`` has been changed since MMSeg '
-                    'v0.16, the pickled outputs could be seg map as type of '
-                    'np.array, pre-eval results or file paths for '
+                    'The behavior of ``args.out`` has been changed since '
+                    'MMSeg v0.16, the pickled outputs could be seg map as '
+                    'type of np.array, pre-eval results or file paths for '
                     '``dataset.format_results()``.')
                 print(f'\nwriting results to {args.out}')
                 mmcv.dump(results, args.out)
@@ -396,125 +411,173 @@ def main():
                 eval_kwargs.update(metric=args.eval)
                 metric = dataset.evaluate(results, **eval_kwargs)
                 metric_dict = dict(config=args.config, metric=metric)
-                metric_dict["iter"] = all_checkpoints_iter[i]
+                metric_dict['iter'] = all_checkpoints_iter[i]
                 mmcv.dump(metric_dict, json_file, indent=4)
                 if tmpdir is not None and eval_on_format_results:
                     # remove tmp dir when cityscapes evaluation
                     shutil.rmtree(tmpdir)
                 curr_res = {}
-                reg_ood_valid = metric_dict['metric'].pop('reg_ood_valid', False)
+                reg_ood_valid = metric_dict['metric'].pop(
+                    'reg_ood_valid', False)
                 sl_ood_valid = metric_dict['metric'].pop('sl_ood_valid', False)
-                in_dist_valid = metric_dict['metric'].pop('in_dist_valid', False)
+                in_dist_valid = metric_dict['metric'].pop(
+                    'in_dist_valid', False)
                 if reg_ood_valid:
                     curr_iter_reg_ood_df = pd.DataFrame(
-                        data=[[all_checkpoints_iter[i],
-                               round(float(metric_dict["metric"]['max_prob.auroc']), 4),
-                               round(float(metric_dict["metric"]['max_prob.aupr']), 4),
-                               round(float(metric_dict["metric"]['max_prob.fpr95']), 4),
-                               round(float(metric_dict["metric"]['max_logit.auroc']), 4),
-                               round(float(metric_dict["metric"]['max_logit.aupr']), 4),
-                               round(float(metric_dict["metric"]['max_logit.fpr95']), 4),
-                               round(float(metric_dict["metric"]['emp_entropy.auroc']), 4),
-                               round(float(metric_dict["metric"]['emp_entropy.aupr']), 4),
-                               round(float(metric_dict["metric"]['emp_entropy.fpr95']), 4)]],
-                        columns=["epoch",
-                                 'max_prob.auroc',
-                                 'max_prob.aupr',
-                                 'max_prob.fpr95',
-                                 'max_logit.auroc',
-                                 'max_logit.aupr',
-                                 'max_logit.fpr95',
-                                 'emp_entropy.auroc',
-                                 'emp_entropy.aupr',
-                                 'emp_entropy.fpr95'
-                                 ])
-                    reg_ood_summary = reg_ood_summary.append(curr_iter_reg_ood_df, ignore_index=True)
+                        data=[[
+                            all_checkpoints_iter[i],
+                            round(
+                                float(metric_dict['metric']['max_prob.auroc']),
+                                4),
+                            round(
+                                float(metric_dict['metric']['max_prob.aupr']),
+                                4),
+                            round(
+                                float(metric_dict['metric']['max_prob.fpr95']),
+                                4),
+                            round(
+                                float(
+                                    metric_dict['metric']['max_logit.auroc']),
+                                4),
+                            round(
+                                float(metric_dict['metric']['max_logit.aupr']),
+                                4),
+                            round(
+                                float(
+                                    metric_dict['metric']['max_logit.fpr95']),
+                                4),
+                            round(
+                                float(metric_dict['metric']
+                                      ['emp_entropy.auroc']), 4),
+                            round(
+                                float(
+                                    metric_dict['metric']['emp_entropy.aupr']),
+                                4),
+                            round(
+                                float(metric_dict['metric']
+                                      ['emp_entropy.fpr95']), 4)
+                        ]],
+                        columns=[
+                            'epoch', 'max_prob.auroc', 'max_prob.aupr',
+                            'max_prob.fpr95', 'max_logit.auroc',
+                            'max_logit.aupr', 'max_logit.fpr95',
+                            'emp_entropy.auroc', 'emp_entropy.aupr',
+                            'emp_entropy.fpr95'
+                        ])
+                    reg_ood_summary = reg_ood_summary.append(
+                        curr_iter_reg_ood_df, ignore_index=True)
 
-                    for a in ("max_prob", "max_logit", "emp_entropy"):
-                        for b in ("auroc", "aupr", "fpr95"):
-                            curr_res[f"{a}.{b}"] = float(metric_dict['metric'][f"{a}.{b}"])
+                    for a in ('max_prob', 'max_logit', 'emp_entropy'):
+                        for b in ('auroc', 'aupr', 'fpr95'):
+                            curr_res[f'{a}.{b}'] = float(
+                                metric_dict['metric'][f'{a}.{b}'])
                 if sl_ood_valid:
                     curr_iter_sl_ood_df = pd.DataFrame(
-                        data=[[all_checkpoints_iter[i],
-                               round(float(metric_dict["metric"]['u.auroc']), 4),
-                               round(float(metric_dict["metric"]['u.aupr']), 4),
-                               round(float(metric_dict["metric"]['u.fpr95']), 4),
-                               round(float(metric_dict["metric"]['disonnance.auroc']), 4),
-                               round(float(metric_dict["metric"]['disonnance.aupr']), 4),
-                               round(float(metric_dict["metric"]['disonnance.fpr95']), 4),
-                               round(float(metric_dict["metric"]['dir_entropy.auroc']), 4),
-                               round(float(metric_dict["metric"]['dir_entropy.aupr']), 4),
-                               round(float(metric_dict["metric"]['dir_entropy.fpr95']), 4)]],
-                        columns=["epoch",
-                                 'u.auroc',
-                                 'u.aupr',
-                                 'u.fpr95',
-                                 'dissonance.auroc',
-                                 'dissonance.aupr',
-                                 'dissonance.fpr95',
-                                 'dir_entropy.auroc',
-                                 'dir_entropy.aupr',
-                                 'dir_entropy.fpr95'
-                                 ])
-                    sl_ood_summary = sl_ood_summary.append(curr_iter_sl_ood_df, ignore_index=True)
+                        data=[[
+                            all_checkpoints_iter[i],
+                            round(float(metric_dict['metric']['u.auroc']), 4),
+                            round(float(metric_dict['metric']['u.aupr']), 4),
+                            round(float(metric_dict['metric']['u.fpr95']), 4),
+                            round(
+                                float(
+                                    metric_dict['metric']['disonnance.auroc']),
+                                4),
+                            round(
+                                float(
+                                    metric_dict['metric']['disonnance.aupr']),
+                                4),
+                            round(
+                                float(
+                                    metric_dict['metric']['disonnance.fpr95']),
+                                4),
+                            round(
+                                float(metric_dict['metric']
+                                      ['dir_entropy.auroc']), 4),
+                            round(
+                                float(
+                                    metric_dict['metric']['dir_entropy.aupr']),
+                                4),
+                            round(
+                                float(metric_dict['metric']
+                                      ['dir_entropy.fpr95']), 4)
+                        ]],
+                        columns=[
+                            'epoch', 'u.auroc', 'u.aupr', 'u.fpr95',
+                            'dissonance.auroc', 'dissonance.aupr',
+                            'dissonance.fpr95', 'dir_entropy.auroc',
+                            'dir_entropy.aupr', 'dir_entropy.fpr95'
+                        ])
+                    sl_ood_summary = sl_ood_summary.append(
+                        curr_iter_sl_ood_df, ignore_index=True)
 
-                    for a in ("u", "disonnance", "dir_entropy"):
-                        for b in ("auroc", "aupr", "fpr95"):
-                            curr_res[f"{a}.{b}"] = float(metric_dict['metric'][f"{a}.{b}"])
+                    for a in ('u', 'disonnance', 'dir_entropy'):
+                        for b in ('auroc', 'aupr', 'fpr95'):
+                            curr_res[f'{a}.{b}'] = float(
+                                metric_dict['metric'][f'{a}.{b}'])
 
                 if in_dist_valid:
-                    curr_res["mIoU"] = float(metric_dict['metric']["mIoU"])
-                    curr_res["mAcc"] = float(metric_dict['metric']["mAcc"])
-                    curr_res["aAcc"] = float(metric_dict['metric']["aAcc"])
+                    curr_res['mIoU'] = float(metric_dict['metric']['mIoU'])
+                    curr_res['mAcc'] = float(metric_dict['metric']['mAcc'])
+                    curr_res['aAcc'] = float(metric_dict['metric']['aAcc'])
 
                 if args.all:
                     for k, v in curr_res.items():
-                        writer.add_scalar(f"test/{k}", v, all_checkpoints_iter[i])
+                        writer.add_scalar(f'test/{k}', v,
+                                          all_checkpoints_iter[i])
 
-                curr_res["iter"] = all_checkpoints_iter[i]
+                curr_res['iter'] = all_checkpoints_iter[i]
                 ans.append(curr_res)
 
-    print("For latex:")
+    print('For latex:')
 
     if sl_ood_valid:
-        print(
-            f"{reg_ood_summary.loc[i, 'max_prob.auroc']*100}&{reg_ood_summary.loc[i, 'max_prob.aupr']*100}&{reg_ood_summary.loc[i, 'max_prob.fpr95']*100}")
-        print(
-            f"{reg_ood_summary.loc[i, 'max_logit.auroc']*100}&{reg_ood_summary.loc[i, 'max_logit.aupr']*100}&{reg_ood_summary.loc[i, 'max_logit.fpr95']*100}")
-        print(
-            f"{reg_ood_summary.loc[i, 'emp_entropy.auroc']*100}&{reg_ood_summary.loc[i, 'emp_entropy.aupr']*100}&{reg_ood_summary.loc[i, 'emp_entropy.fpr95']*100}")
-        print(f"{sl_ood_summary.loc[i, 'u.auroc']*100}&{sl_ood_summary.loc[i, 'u.aupr']*100}&{sl_ood_summary.loc[i, 'u.fpr95']*100}")
-        print(
-            f"{sl_ood_summary.loc[i, 'dissonance.auroc']*100}&{sl_ood_summary.loc[i, 'dissonance.aupr']*100}&{sl_ood_summary.loc[i, 'dissonance.fpr95']*100}")
-
-        # print(
-        #     f"{reg_ood_summary.loc[i, 'max_prob.auroc']}/{reg_ood_summary.loc[i, 'max_logit.auroc']}/{reg_ood_summary.loc[i, 'emp_entropy.auroc']}/{sl_ood_summary.loc[i, 'u.auroc']}/{sl_ood_summary.loc[i, 'disonnance.auroc']}"
-        #     f"&{reg_ood_summary.loc[i, 'max_prob.aupr']}/{reg_ood_summary.loc[i, 'max_logit.aupr']}/{reg_ood_summary.loc[i, 'emp_entropy.aupr']}/{sl_ood_summary.loc[i, 'u.aupr']}/{sl_ood_summary.loc[i, 'disonnance.aupr']}"
-        #     f"&{reg_ood_summary.loc[i, 'max_prob.fpr95']}/{reg_ood_summary.loc[i, 'max_logit.fpr95']}/{reg_ood_summary.loc[i, 'emp_entropy.fpr95']}/{sl_ood_summary.loc[i, 'u.fpr95']}/{sl_ood_summary.loc[i, 'disonnance.fpr95']}")
+        print(f"{reg_ood_summary.loc[i, 'max_prob.auroc']*100}&"
+              f"{reg_ood_summary.loc[i, 'max_prob.aupr']*100}&"
+              f"{reg_ood_summary.loc[i, 'max_prob.fpr95']*100}")
+        print(f"{reg_ood_summary.loc[i, 'max_logit.auroc']*100}&"
+              f"{reg_ood_summary.loc[i, 'max_logit.aupr']*100}&"
+              f"{reg_ood_summary.loc[i, 'max_logit.fpr95']*100}")
+        print(f"{reg_ood_summary.loc[i, 'emp_entropy.auroc']*100}&"
+              f"{reg_ood_summary.loc[i, 'emp_entropy.aupr']*100}&"
+              f"{reg_ood_summary.loc[i, 'emp_entropy.fpr95']*100}")
+        print(f"{sl_ood_summary.loc[i, 'u.auroc']*100}&"
+              f"{sl_ood_summary.loc[i, 'u.aupr']*100}&"
+              f"{sl_ood_summary.loc[i, 'u.fpr95']*100}")
+        print(f"{sl_ood_summary.loc[i, 'dissonance.auroc']*100}&"
+              f"{sl_ood_summary.loc[i, 'dissonance.aupr']*100}&"
+              f"{sl_ood_summary.loc[i, 'dissonance.fpr95']*100}")
     else:
-        print(
-            f"{reg_ood_summary.loc[i, 'max_prob.auroc']*100}&{reg_ood_summary.loc[i, 'max_prob.aupr']*100}&{reg_ood_summary.loc[i, 'max_prob.fpr95']*100}")
-        print(
-            f"{reg_ood_summary.loc[i, 'max_logit.auroc']*100}&{reg_ood_summary.loc[i, 'max_logit.aupr']*100}&{reg_ood_summary.loc[i, 'max_logit.fpr95']*100}")
-        print(
-            f"{reg_ood_summary.loc[i, 'emp_entropy.auroc']*100}&{reg_ood_summary.loc[i, 'emp_entropy.aupr']*100}&{reg_ood_summary.loc[i, 'emp_entropy.fpr95']*100}")
-        print(f"-.--&-.--&-.--")
-        print(f"-.--&-.--&-.--")
-        # print(
-        #     f"{reg_ood_summary.loc[i, 'max_prob.auroc']}/{reg_ood_summary.loc[i, 'max_logit.auroc']}/{reg_ood_summary.loc[i, 'emp_entropy.auroc']}/-.--/-.--"
-        #     f"&{reg_ood_summary.loc[i, 'max_prob.aupr']}/{reg_ood_summary.loc[i, 'max_logit.aupr']}/{reg_ood_summary.loc[i, 'emp_entropy.aupr']}/-.--/-.--"
-        #     f"&{reg_ood_summary.loc[i, 'max_prob.fpr95']}/{reg_ood_summary.loc[i, 'max_logit.fpr95']}/{reg_ood_summary.loc[i, 'emp_entropy.fpr95']}/-.--/-.--")
+        print(f"{reg_ood_summary.loc[i, 'max_prob.auroc']*100}&"
+              f"{reg_ood_summary.loc[i, 'max_prob.aupr']*100}&"
+              f"{reg_ood_summary.loc[i, 'max_prob.fpr95']*100}")
+        print(f"{reg_ood_summary.loc[i, 'max_logit.auroc']*100}&"
+              f"{reg_ood_summary.loc[i, 'max_logit.aupr']*100}&"
+              f"{reg_ood_summary.loc[i, 'max_logit.fpr95']*100}")
+        print(f"{reg_ood_summary.loc[i, 'emp_entropy.auroc']*100}&"
+              f"{reg_ood_summary.loc[i, 'emp_entropy.aupr']*100}&"
+              f"{reg_ood_summary.loc[i, 'emp_entropy.fpr95']*100}")
 
-    suffixe = re.search(r"(?:[0-9]{14})_(.*)$", args.work_dir).groups()[0]
-    with open(os.path.join(args.work_dir, f"test_results_all_{suffixe}.json" if args.all else f"test_results_{suffixe}.json"), "w") as f:
+    suffixe = re.search(r'(?:[0-9]{14})_(.*)$', args.work_dir).groups()[0]
+    with open(
+            os.path.join(
+                args.work_dir, f'test_results_all_{suffixe}.json'
+                if args.all else f'test_results_{suffixe}.json'), 'w') as f:
         json.dump(ans, f)
-    
-    if not hasattr(cfg.model.decode_head, "vi_nsamples_test"):
-        fusion_method= 'none'
-    
-    reg_ood_summary.to_csv(os.path.join(args.work_dir, f"reg_ood_metrics_{suffixe}_{fusion_method}{'_subtest' if args.config.endswith('subtest.py') else ''}.csv"))
-    sl_ood_summary.to_csv(os.path.join(args.work_dir, f"sl_ood_metrics_{suffixe}_{fusion_method}{'_subtest' if args.config.endswith('subtest.py') else ''}.csv"))
-    
+
+    if not hasattr(cfg.model.decode_head, 'vi_nsamples_test'):
+        fusion_method = 'none'
+
+    reg_ood_summary.to_csv(
+        os.path.join(
+            args.work_dir,
+            f"reg_ood_metrics_{suffixe}_{fusion_method}{'_subtest' if args.config.endswith('subtest.py') else ''}.csv"  # noqa
+        ))
+    sl_ood_summary.to_csv(
+        os.path.join(
+            args.work_dir,
+            f"sl_ood_metrics_{suffixe}_{fusion_method}{'_subtest' if args.config.endswith('subtest.py') else ''}.csv"  # noqa
+        ))
+
 
 if __name__ == '__main__':
     main()
