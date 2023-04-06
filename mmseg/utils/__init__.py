@@ -9,8 +9,7 @@ from .set_env import setup_multi_processes
 from .util_distribution import build_ddp, build_dp, get_device
 
 __all__ = [
-    'get_root_logger', 'collect_env', 'find_latest_checkpoint',
+    'get_root_logger', 'collect_env', 'find_latest_checkpoint', 'get_device',
     'setup_multi_processes', 'get_ood_measures', 'build_ddp', 'build_dp',
-    'get_device', 'brierscore', 'diss', 'print_measures',
-    'print_measures_with_std'
+    'brierscore', 'print_measures', 'print_measures_with_std', 'diss'
 ]
