@@ -24,7 +24,7 @@ class ParseEpochToDecodeHead(Hook):
             assert all(model.decode_head.kl_weights[0] == w
                        for w in model.decode_head.kl_weights[1:])
             print_log('KL weight: '
-                      '{float(np.mean(model.decode_head.kl_weights)):.2f}')
+                      f'{float(np.mean(model.decode_head.kl_weights)):.2f}')
             print_log('Avg Epoch KL term: '
                       f'{float(np.mean(model.decode_head.kl_vals)):.2f}')
             model.decode_head.kl_weights = []
