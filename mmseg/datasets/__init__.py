@@ -19,10 +19,10 @@ from .loveda import LoveDADataset
 from .night_driving import NightDrivingDataset
 from .pascal_context import PascalContextDataset, PascalContextDataset59
 from .potsdam import PotsdamDataset
-from .stare import STAREDataset
-from .voc import PascalVOCDataset
 from .road_anomaly import RoadAnomalyDataset
+from .stare import STAREDataset
 from .street_hazards import StreetHazardsDataset
+from .voc import PascalVOCDataset
 
 __all__ = [
     'CustomDataset', 'build_dataloader', 'ConcatDataset', 'RepeatDataset',
@@ -33,5 +33,5 @@ __all__ = [
     'COCOStuffDataset', 'LoveDADataset', 'MultiImageMixDataset',
     'iSAIDDataset', 'ISPRSDataset', 'PotsdamDataset', 'FaceOccludedDataset',
     'ImageNetSDataset', 'LoadImageNetSAnnotations',
-    'LoadImageNetSImageFromFile', "RoadAnomalyDataset", "StreetHazardsDataset"
+    'LoadImageNetSImageFromFile', 'RoadAnomalyDataset', 'StreetHazardsDataset'
 ]

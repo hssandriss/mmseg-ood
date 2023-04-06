@@ -1,24 +1,19 @@
 # Copyright (c) OpenMMLab. All rights reserved.
-import os.path as osp
-
+from copy import deepcopy
+from typing import Tuple
 
 import numpy as np
-from mmcv.utils import print_log
-from PIL import Image
-from typing import Tuple
+import torch
+
+from ..utils import get_ood_measures, print_measures, print_measures_with_std
 from .builder import DATASETS
 from .custom import CustomDataset
-from sklearn.metrics import roc_auc_score, precision_recall_curve, roc_curve, auc
-from ..utils import get_ood_measures, print_measures_with_std, print_measures
-import torch
-from copy import deepcopy
 
 
 @DATASETS.register_module()
 class RoadAnomalyDataset(CustomDataset):
-    """Road Anomaly dataset.
-        THIS DATASETJUST FOR TESTING!!
-        It has annotated the anomalies
+    """Road Anomaly dataset. THIS DATASETJUST FOR TESTING!! It has annotated
+    the anomalies.
 
     The ``img_suffix`` is fixed to '_leftImg8bit.png' and ``seg_map_suffix`` is
     fixed to '_gtFine_labelTrainIds.png' for Cityscapes dataset.
@@ -39,20 +34,25 @@ class RoadAnomalyDataset(CustomDataset):
                  img_suffix='.jpg',
                  seg_map_suffix='.labels/labels_semantic_converted.png',
                  **kwargs):
-        super(RoadAnomalyDataset, self).__init__(img_suffix=img_suffix, seg_map_suffix=seg_map_suffix,
-                                                 reduce_zero_label=False, **kwargs)
+        super(RoadAnomalyDataset, self).__init__(
+            img_suffix=img_suffix,
+            seg_map_suffix=seg_map_suffix,
+            reduce_zero_label=False,
+            **kwargs)
         self.ood_indices = [25]  # road anomaly has two labels 0 and 25
         self.num_classes = 19  # cityscapes
 
-    def evaluate_ood(self, out_scores, in_scores) -> Tuple[np.float64, np.float64, np.float64]:
-        auroc, apr, fpr = get_ood_measures(out_scores, in_scores)
-        return auroc, apr, fpr
+    def evaluate_ood(self, out_scores,
+                     in_scores) -> Tuple[np.float64, np.float64, np.float64]:
+        auroc, aupr, fpr = get_ood_measures(out_scores, in_scores)
+        return auroc, aupr, fpr
 
     def get_in_out_conf(self, pred_confs, seg_gt, conf_type):
-        # conf_type could be lo or hi and stands for in-distribution show have a lo(lower) or hi(higher) value 
-        # compared to oo-distribution.
-        
-        assert conf_type in ("lo", "hi")
+        # conf_type could be (lo or hi)
+        # lo means that ood have lower values
+        # hi means that ood have higher values
+
+        assert conf_type in ('lo', 'hi')
         confs = deepcopy(pred_confs)
         # Mask ignored index
         mask = (seg_gt != self.ignore_index)
@@ -64,22 +64,33 @@ class RoadAnomalyDataset(CustomDataset):
         out_index = (seg_gt == self.ood_indices[0])
         for label in self.ood_indices:
             out_index = np.logical_or(out_index, (seg_gt == label))
-
-        # samples with out indices are positive class so they should have higher scores
-        if conf_type == "hi":
-            in_scores = - confs[np.logical_not(out_index)]
-            out_scores = - confs[out_index]
+        if conf_type == 'hi':
+            in_scores = -confs[np.logical_not(out_index)]
+            out_scores = -confs[out_index]
         else:
             # entropy, vacuity, dissonance
             in_scores = confs[np.logical_not(out_index)]
             out_scores = confs[out_index]
         return out_scores, in_scores
 
-    def print_ood_measures(self, aurocs, auprs, fprs, eces, logger=None, text="max_softmax"):
+    def print_ood_measures(self,
+                           aurocs,
+                           auprs,
+                           fprs,
+                           eces,
+                           logger=None,
+                           text='max_softmax'):
         print_measures(aurocs, auprs, fprs, eces, logger=logger, text=text)
 
-    def print_ood_measures_with_std(self, aurocs, auprs, fprs, eces, logger=None, text="max_softmax"):
-        print_measures_with_std(aurocs, auprs, fprs, eces, logger=logger, text=text)
+    def print_ood_measures_with_std(self,
+                                    aurocs,
+                                    auprs,
+                                    fprs,
+                                    eces,
+                                    logger=None,
+                                    text='max_softmax'):
+        print_measures_with_std(
+            aurocs, auprs, fprs, eces, logger=logger, text=text)
 
     def get_ood_masker(self, seg_gt):
         # Find out which pixels are OOD and which are not
@@ -93,13 +104,15 @@ class RoadAnomalyDataset(CustomDataset):
         assert len(seg_gt.size()) == 2
         stride = kernel_size
 
-        patches = seg_gt.unfold(0, kernel_size, stride).unfold(1, kernel_size, stride)
+        patches = seg_gt.unfold(0, kernel_size,
+                                stride).unfold(1, kernel_size, stride)
         unfold_shape = patches.size()
 
         # DO Whatever ops that doesn't change the shape
         ones = torch.ones_like(patches, dtype=torch.bool)
         zeros = torch.zeros_like(patches, dtype=torch.bool)
-        patches_eq_elems = (patches == patches[:, :, 0:1, 0:1]).all(-1, True).all(-2, True).repeat(1, 1, kernel_size, kernel_size)
+        patches_eq_elems = (patches == patches[:, :, 0:1, 0:1]).all(
+            -1, True).all(-2, True).repeat(1, 1, kernel_size, kernel_size)
         patches = torch.where(patches_eq_elems, zeros, ones)
 
         assert patches.size() == unfold_shape
@@ -120,7 +133,8 @@ class RoadAnomalyDataset(CustomDataset):
         seg_gt = torch.from_numpy(seg_gt)
         assert len(seg_gt.size()) == 2
 
-        patches = seg_gt.unfold(0, kernel_size, stride).unfold(1, kernel_size, stride)
+        patches = seg_gt.unfold(0, kernel_size,
+                                stride).unfold(1, kernel_size, stride)
         unfold_shape = patches.size()
 
         # DO Whatever ops that doesn't change the shape
@@ -137,9 +151,9 @@ class RoadAnomalyDataset(CustomDataset):
         assert (patches_orig == seg_gt).all()
 
     def get_bags(self, mul=10):
-        if not hasattr(self, "class_count_pixel"):
+        if not hasattr(self, 'class_count_pixel'):
             try:
-                with open("class_count_cityscapes_pixel.npy", "rb") as f:
+                with open('class_count_cityscapes_pixel.npy', 'rb') as f:
                     self.class_count_pixel = np.load(f)
             except FileNotFoundError as e:
                 raise e
@@ -190,7 +204,8 @@ class RoadAnomalyDataset(CustomDataset):
             bag_label_maps.append(label_map)
 
             bag_clas_count = class_count[bag_masks[i]]
-            bag_clas_count = np.append(bag_clas_count, class_count[~bag_masks[i]].sum())
+            bag_clas_count = np.append(bag_clas_count,
+                                       class_count[~bag_masks[i]].sum())
             bag_class_counts.append(bag_clas_count)
 
             oth_mask = np.zeros(num_bags, dtype=bool)
@@ -198,8 +213,12 @@ class RoadAnomalyDataset(CustomDataset):
             bag_masks[i] = np.concatenate((bag_masks[i], oth_mask))
             bags_classes.append([*np.where(bag_masks[i])[0]])
 
-        assert all([bag_class_count.sum() == class_count.sum() for bag_class_count in bag_class_counts])
-        assert np.sum([bag_mask.sum() for bag_mask in bag_masks]) == self.num_classes + num_bags
+        assert all([
+            bag_class_count.sum() == class_count.sum()
+            for bag_class_count in bag_class_counts
+        ])
+        assert np.sum([bag_mask.sum() for bag_mask in bag_masks
+                       ]) == self.num_classes + num_bags
 
         self.num_bags = num_bags
         self.label2bag = label2bag
