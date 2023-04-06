@@ -831,7 +831,6 @@ class CustomDataset(Dataset):
         else:
             class_names = self.CLASSES
 
-        import ipdb; ipdb.set_trace()
         # summary table
         default_metrics = ('aAcc', 'IoU', 'Acc', 'Fscore', 'Precision', 'Recall', 'Dice', '')
         ret_metrics_summary = OrderedDict({
