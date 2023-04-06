@@ -23,12 +23,8 @@ model = dict(
         num_heads=6,
         embed_dims=384,
         dropout_ratio=0.0,
-        
-        loss_decode=dict(type='EDLLoss',
-                         loss_variant='mse',
-                         num_classes=19)),
-    test_cfg=dict(mode='whole')
-    )
+        loss_decode=dict(type='EDLLoss', loss_variant='mse', num_classes=19)),
+    test_cfg=dict(mode='whole'))
 
 optimizer = dict(lr=0.001, weight_decay=0.0)
 data = dict(

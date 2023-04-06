@@ -23,9 +23,7 @@ model = dict(
         dropout_ratio=0.0,
         concat_input=False,
         num_classes=19,
-        loss_decode=dict(type='EDLLoss',
-                         loss_variant='mse',
-                         num_classes=19)))
+        loss_decode=dict(type='EDLLoss', num_classes=19)))
 
 optimizer = dict(lr=0.001, weight_decay=0.0)
 data = dict(

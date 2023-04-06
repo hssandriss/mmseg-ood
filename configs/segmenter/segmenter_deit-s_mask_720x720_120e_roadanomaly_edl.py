@@ -4,8 +4,7 @@ _base_ = [
     '../_base_/schedules/schedule_120e.py'
 ]
 
-# checkpoint = 'https://download.openmmlab.com/mmsegmentation/v0.5/pretrain/segmenter/vit_small_p16_384_20220308-410f6037.pth'  # noqa
-checkpoint= 'pretrain/deit_small_patch16_224-cd65a155_converted.pth'
+checkpoint = 'pretrain/deit_small_patch16_224-cd65a155_converted.pth'
 backbone_norm_cfg = dict(type='LN', eps=1e-6, requires_grad=True)
 model = dict(
     pretrained=checkpoint,
@@ -23,10 +22,7 @@ model = dict(
         num_heads=6,
         embed_dims=384,
         dropout_ratio=0.0,
-        
-        loss_decode=dict(type='EDLLoss',
-                         loss_variant='mse',
-                         num_classes=19)))
+        loss_decode=dict(type='EDLLoss', loss_variant='mse', num_classes=19)))
 
 optimizer = dict(lr=0.001, weight_decay=0.0)
 data = dict(

@@ -1,24 +1,24 @@
 # dataset settings
-dataset_type = "RoadAnomalyDataset"
-data_root = "/misc/lmbraid17/datasets/public/RoadAnomaly/RoadAnomaly_jpg_converted/"
+dataset_type = 'RoadAnomalyDataset'
+data_root = '/misc/lmbraid17/datasets/public' \
+            '/RoadAnomaly/RoadAnomaly_jpg_converted/'
 img_norm_cfg = dict(
-    mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375], to_rgb=True
-)
+    mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375], to_rgb=True)
 crop_size = (720, 720)
 max_ratio = 2
 
 test_pipeline = [
-    dict(type="LoadImageFromFile"),
+    dict(type='LoadImageFromFile'),
     dict(
-        type="MultiScaleFlipAug",
+        type='MultiScaleFlipAug',
         img_scale=(2048, 1024),
         flip=False,
         transforms=[
-            dict(type="Resize", keep_ratio=True),
-            dict(type="RandomFlip"),
-            dict(type="Normalize", **img_norm_cfg),
+            dict(type='Resize', keep_ratio=True),
+            dict(type='RandomFlip'),
+            dict(type='Normalize', **img_norm_cfg),
             dict(type='ImageToTensor', keys=['img']),
-            dict(type="Collect", keys=["img"]),
+            dict(type='Collect', keys=['img']),
         ],
     ),
 ]
@@ -28,10 +28,9 @@ data = dict(
     test=dict(
         type=dataset_type,
         data_root=data_root,
-        img_dir="frames",
-        ann_dir="frames",
+        img_dir='frames',
+        ann_dir='frames',
         img_suffix='.jpg',
         seg_map_suffix='.labels/labels_semantic_converted.png',
-        pipeline=test_pipeline
-    ),
+        pipeline=test_pipeline),
 )
