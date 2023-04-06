@@ -1,1 +1,0 @@
-{"avg_runtime": 0.4827168804135401, "std_runtime": 0.12162594985234343, "avg_initial_u_id": 0.016012567461065014, "avg_initial_u_ood": 0.0, "avg_u_gain_id": 0.0, "avg_u_gain_ood": 0.00921499886985541, "avg_u_gain": 0.00921499886985541, "information gain": -0.09885311373860456, "information gain (ood)": 0.0, "information gain (id)": -0.09885311373860456}
