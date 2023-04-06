@@ -1,9 +1,9 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from typing import Optional
 
+import numpy as np
 from mmcv.parallel import is_module_wrapper
 from mmcv.runner import HOOKS, Hook
-import numpy as np
 from mmcv.utils import print_log
 
 
@@ -49,19 +49,16 @@ class CustomEMAHook(Hook):
         self.momentum = momentum
         self.checkpoint = resume_from
         self.enabled = False
-        # self.schedule = lambda epoch, total_epochs: np.exp(np.log(0.0002) * epoch / (total_epochs - 1))
 
     def before_run(self, runner):
-        """
-        To resume model with it's ema parameters more friendly.
+        """To resume model with it's ema parameters more friendly.
+
         Register ema parameter as ``named_buffer`` to model
         """
         model = runner.model
         if is_module_wrapper(model):
             model = model.module
         self.param_ema_buffer = {}
-        # self.model_parameters is a reference to model params and not a copy
-        # dict(runner.model.module.named_parameters(recurse=True))['backbone.stem.0.weight'] is self.model_parameters['backbone.stem.0.weight']
         self.model_parameters = dict(model.named_parameters(recurse=True))
         for name, value in self.model_parameters.items():
             # "." is not allowed in module's buffer name
@@ -73,38 +70,36 @@ class CustomEMAHook(Hook):
             runner.resume(self.checkpoint)
 
     def after_train_iter(self, runner):
-        """
-        Update ema parameter every self.interval iterations.
+        """Update ema parameter every self.interval iterations.
+
         Here Buffer Parameters are updated no model parameters
         """
         curr_step = runner.iter
         # We warm up the momentum considering the instability at beginning
-        momentum = min(self.momentum, (1 + curr_step) / (self.warm_up + curr_step))
-        # momentum = self.momentum
-        if curr_step % self.interval != 0 and runner.epoch > self.warm_up_epochs:
+        momentum = min(self.momentum,
+                       (1 + curr_step) / (self.warm_up + curr_step))
+
+        if (curr_step % self.interval != 0
+                and runner.epoch > self.warm_up_epochs):
             return
         self.enabled = True
         for name, parameter in self.model_parameters.items():
             buffer_name = self.param_ema_buffer[name]
             buffer_parameter = self.model_buffers[buffer_name]
-            # current= (1-m)*prev + m*current
             buffer_parameter.mul_(1 - momentum).add_(momentum * parameter.data)
 
     def after_train_epoch(self, runner):
-        """
-        We load parameter values from ema backup to model before the EvalHook.
-        """
+        """We load parameter values from ema backup to model before the
+        EvalHook."""
         if self.enabled:
             self._swap_ema_parameters()
 
     def before_train_epoch(self, runner):
-        """
-        We recover model's parameter from ema backup after last epoch's EvalHook.
-        """
+        """We recover model's parameter from ema backup after last epoch's
+        EvalHook."""
         if self.enabled:
             self._swap_ema_parameters()
-            # self.momentum = exp_schedule(runner.epoch, runner._max_epochs, lo=0.0002, hi=1.)
-            print_log(f"EMA momentum: {self.momentum}")
+            print_log(f'EMA momentum: {self.momentum}')
 
     def _swap_ema_parameters(self):
         """Swap the parameter of model with parameter in ema_buffer."""

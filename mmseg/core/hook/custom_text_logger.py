@@ -5,19 +5,20 @@ import os.path as osp
 from collections import OrderedDict
 from typing import Dict, Optional, Union
 
+import mmcv
 import torch
 import torch.distributed as dist
-
-import mmcv
 from mmcv.fileio.file_client import FileClient
-from mmcv.utils import is_tuple_of, scandir
 from mmcv.runner import HOOKS
+from mmcv.utils import is_tuple_of, scandir
+
 from .base_logger_hook import LoggerHook_
 
 
 @HOOKS.register_module()
 class CustomTextLoggerHook(LoggerHook_):
     """Logger hook in text.
+
     In this logger hook, the information will be printed on terminal and
     saved in json file.
     Args:
@@ -94,17 +95,22 @@ class CustomTextLoggerHook(LoggerHook_):
             # and the last level directory of `runner.work_dir`
             basename = osp.basename(runner.work_dir.rstrip(osp.sep))
             self.out_dir = self.file_client.join_path(self.out_dir, basename)
-            runner.logger.info(f'Text logs will be saved to {self.out_dir} by {self.file_client.name} after the training process.')
+            runner.logger.info(
+                f'Text logs will be saved to {self.out_dir} by '
+                f'{self.file_client.name} after the training process.')
         self.start_epoch = runner.epoch
         self.start_iter = runner.iter
-        self.json_log_path = osp.join(runner.work_dir, f'{runner.timestamp}.log.json')
+        self.json_log_path = osp.join(runner.work_dir,
+                                      f'{runner.timestamp}.log.json')
         if runner.meta is not None:
             self._dump_log(runner.meta, runner)
 
     def _get_max_memory(self, runner) -> int:
         device = getattr(runner.model, 'output_device', None)
         mem = torch.cuda.max_memory_allocated(device=device)
-        mem_mb = torch.tensor([int(mem) // (1024 * 1024)], dtype=torch.int, device=device)
+        mem_mb = torch.tensor([int(mem) // (1024 * 1024)],
+                              dtype=torch.int,
+                              device=device)
         if runner.world_size > 1:
             dist.reduce(mem_mb, 0, op=dist.ReduceOp.MAX)
         return mem_mb.item()
@@ -113,7 +119,8 @@ class CustomTextLoggerHook(LoggerHook_):
         # print exp name for users to distinguish experiments
         # at every ``interval_exp_name`` iterations and the end of each epoch
         if runner.meta is not None and 'exp_name' in runner.meta:
-            if (self.every_n_iters(runner, self.interval_exp_name)) or (self.by_epoch and self.end_of_epoch(runner)):
+            if (self.every_n_iters(runner, self.interval_exp_name)) or (
+                    self.by_epoch and self.end_of_epoch(runner)):
                 exp_info = f'Exp name: {runner.meta["exp_name"]}'
                 exp_dir = f'Logging dir: {osp.basename(runner.work_dir)}'
                 runner.logger.info(exp_info)
@@ -130,16 +137,18 @@ class CustomTextLoggerHook(LoggerHook_):
             # by epoch: Epoch [4][100/1000]
             # by iter:  Iter [100/100000]
             if self.by_epoch:
-                log_str = f'Epoch [{log_dict["epoch"]}][{log_dict["iter"]}/{len(runner.data_loader)}]\t'
+                log_str = f'Epoch [{log_dict["epoch"]}][{log_dict["iter"]}/{len(runner.data_loader)}]\t'  # noqa
             else:
                 log_str = f'Iter [{log_dict["iter"]}/{runner.max_iters}]\t'
             log_str += f'{lr_str}, '
             if 'time' in log_dict.keys():
-                self.time_sec_tot += (log_dict['time'] * runner.iter / (runner.epoch + 1))
-                time_sec_avg = self.time_sec_tot / (runner.iter - self.start_iter + 1)
+                self.time_sec_tot += (
+                    log_dict['time'] * runner.iter / (runner.epoch + 1))
+                time_sec_avg = self.time_sec_tot / (
+                    runner.iter - self.start_iter + 1)
                 eta_sec = time_sec_avg * (runner.max_iters - runner.iter - 1)
                 eta_str = str(datetime.timedelta(seconds=int(eta_sec)))
-                log_str += f'eta: {eta_str}, time: {log_dict["time"]:.3f}, data_time: {log_dict["data_time"]:.3f}, '
+                log_str += f'eta: {eta_str}, time: {log_dict["time"]:.3f}, data_time: {log_dict["data_time"]:.3f}, '  # noqa
                 # statistic memory
                 if torch.cuda.is_available():
                     log_str += f'memory: {log_dict["memory"]}, '
@@ -149,7 +158,7 @@ class CustomTextLoggerHook(LoggerHook_):
             # by epoch: Epoch[val] [4][1000]
             # by iter: Iter[val] [1000]
             if self.by_epoch:
-                log_str = f'Epoch({log_dict["mode"]}) [{log_dict["epoch"]}][{log_dict["iter"]}]\t'
+                log_str = f'Epoch({log_dict["mode"]}) [{log_dict["epoch"]}][{log_dict["iter"]}]\t'  # noqa
             else:
                 log_str = f'Iter({log_dict["mode"]}) [{log_dict["iter"]}]\t'
 
@@ -157,7 +166,10 @@ class CustomTextLoggerHook(LoggerHook_):
         for name, val in log_dict.items():
             # TODO: resolve this hack
             # these items have been in log_str
-            if name in ['mode', 'Epoch', 'iter', 'lr', 'time', 'data_time', 'memory', 'epoch']:
+            if name in [
+                    'mode', 'Epoch', 'iter', 'lr', 'time', 'data_time',
+                    'memory', 'epoch'
+            ]:
                 continue
             if isinstance(val, float):
                 val = f'{val:.4f}'
@@ -192,7 +204,10 @@ class CustomTextLoggerHook(LoggerHook_):
         else:
             cur_iter = self.get_iter(runner, inner_iter=True)
 
-        log_dict = OrderedDict(mode=self.get_mode(runner), epoch=self.get_epoch(runner), iter=cur_iter)
+        log_dict = OrderedDict(
+            mode=self.get_mode(runner),
+            epoch=self.get_epoch(runner),
+            iter=cur_iter)
 
         # only record lr of the first param group
         cur_lr = runner.current_lr()
@@ -221,12 +236,16 @@ class CustomTextLoggerHook(LoggerHook_):
         if self.out_dir is not None:
             for filename in scandir(runner.work_dir, self.out_suffix, True):
                 local_filepath = osp.join(runner.work_dir, filename)
-                out_filepath = self.file_client.join_path(self.out_dir, filename)
+                out_filepath = self.file_client.join_path(
+                    self.out_dir, filename)
                 with open(local_filepath) as f:
                     self.file_client.put_text(f.read(), out_filepath)
 
-                runner.logger.info(f'The file {local_filepath} has been uploaded to {out_filepath}.')
+                runner.logger.info(
+                    f'The file {local_filepath} has been uploaded '
+                    f'to {out_filepath}.')
 
                 if not self.keep_local:
                     os.remove(local_filepath)
-                    runner.logger.info(f'{local_filepath} was removed due to the `self.keep_local=False`')
+                    runner.logger.info(f'{local_filepath} was removed due '
+                                       'to the `self.keep_local=False`')

@@ -2,15 +2,17 @@
 import os.path as osp
 from typing import Optional
 
-from mmcv.utils import TORCH_VERSION, digit_version
-from mmcv.runner.dist_utils import master_only
 from mmcv.runner import HOOKS
+from mmcv.runner.dist_utils import master_only
+from mmcv.utils import TORCH_VERSION, digit_version
+
 from .base_logger_hook import LoggerHook_
 
 
 @HOOKS.register_module()
 class CustomTensorboardLoggerHook(LoggerHook_):
     """Class to log metrics to Tensorboard.
+
     Args:
         log_dir (string): Save directory location. Default: None. If default
             values are used, directory location is ``runner.work_dir``/tf_logs.

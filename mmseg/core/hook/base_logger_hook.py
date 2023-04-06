@@ -5,12 +5,12 @@ from typing import Dict
 
 import numpy as np
 import torch
-
 from mmcv.runner.hooks import Hook
 
 
 class LoggerHook_(Hook):
     """Base class for logger hooks.
+
     Args:
         interval (int): Logging interval (every k iterations). Default 10.
         ignore_last (bool): Ignore the log of last iterations in each epoch
@@ -41,6 +41,7 @@ class LoggerHook_(Hook):
                   include_np: bool = True,
                   include_torch: bool = True) -> bool:
         """Tell the input variable is a scalar or not.
+
         Args:
             val: Input variable.
             include_np (bool): Whether include 0-d np.ndarray as a scalar.
