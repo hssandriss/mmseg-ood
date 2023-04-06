@@ -1,12 +1,19 @@
+# Copyright (c) OpenMMLab. All rights reserved.
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+
 from ..builder import LOSSES
 
 
 @LOSSES.register_module
 class BeliefMatchingLoss(nn.Module):
-    def __init__(self, coef, prior=1., loss_weight=1., reduction="mean", loss_name="bm_loss"):
+
+    def __init__(self,
+                 coef,
+                 prior=1.,
+                 loss_weight=1.,
+                 reduction='mean',
+                 loss_name='bm_loss'):
         super(BeliefMatchingLoss, self).__init__()
         self.prior = prior
         self.coeff = coef
@@ -26,7 +33,8 @@ class BeliefMatchingLoss(nn.Module):
 
         '''
         assert reduction_override in (None, 'none', 'mean', 'sum')
-        reduction = (reduction_override if reduction_override else self.reduction)
+        reduction = (
+            reduction_override if reduction_override else self.reduction)
         alphas = torch.exp(torch.clamp(pred, -10, 10))
 
         # alphas = F.softplus(pred)  # leads to inf with exp
@@ -42,18 +50,20 @@ class BeliefMatchingLoss(nn.Module):
         a_zero = torch.sum(alphas, 1)
         ll_loss = torch.digamma(a_ans) - torch.digamma(a_zero)
         if torch.isnan(ll_loss).any():
-            import ipdb; ipdb.set_trace()
-        # compute kl loss: loss1 + loss2
-        #       loss1 = log_gamma(alpha_zero) - \sum_k log_gamma(alpha_zero)
-        #       loss2 = sum_k (alpha_k - beta_k) (digamma(alpha_k) - digamma(alpha_zero) )
+            import ipdb
+            ipdb.set_trace()
 
         loss1 = torch.lgamma(a_zero) - torch.sum(torch.lgamma(alphas), 1)
         if torch.isnan(loss1).any():
-            import ipdb; ipdb.set_trace()
+            import ipdb
+            ipdb.set_trace()
 
-        loss2 = torch.sum((alphas - betas) * (torch.digamma(alphas) - torch.digamma(a_zero.unsqueeze(1))), 1)
+        loss2 = torch.sum(
+            (alphas - betas) *
+            (torch.digamma(alphas) - torch.digamma(a_zero.unsqueeze(1))), 1)
         if torch.isnan(loss2).any():
-            import ipdb; ipdb.set_trace()
+            import ipdb
+            ipdb.set_trace()
 
         kl_loss = loss1 + loss2
 

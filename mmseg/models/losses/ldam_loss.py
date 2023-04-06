@@ -1,10 +1,11 @@
+# Copyright (c) OpenMMLab. All rights reserved.
+import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from ..builder import LOSSES
-from .utils import get_class_count, weight_reduce_loss
-import numpy as np
-import torch.nn.functional as F
+from .utils import get_class_count
 
 
 @LOSSES.register_module
@@ -14,15 +15,23 @@ class LDAMLoss(nn.Module):
     Works only with ignore index
     """
 
-    def __init__(
-            self, class_count, max_margin=0.5, class_weight=None, scale=30, reduction="mean", warm=50, loss_weight=1.0, avg_non_ignore=False,
-            use_bags=True, loss_name='loss_ce_ldam'):
+    def __init__(self,
+                 class_count,
+                 max_margin=0.5,
+                 class_weight=None,
+                 scale=30,
+                 reduction='mean',
+                 warm=50,
+                 loss_weight=1.0,
+                 avg_non_ignore=False,
+                 use_bags=True,
+                 loss_name='loss_ce_ldam'):
 
         super(LDAMLoss, self).__init__()
         if self.warm > 0:
-            self.loss_name = "loss_ce"
+            self.loss_name = 'loss_ce'
         else:
-            self.loss_name = "loss_ldam"
+            self.loss_name = 'loss_ldam'
         self.loss_name = loss_name
         self.scale = scale
         self.reduction = reduction
@@ -33,14 +42,16 @@ class LDAMLoss(nn.Module):
         self.epoch_num = 0
         self.use_bags = False
         if not use_bags:
-            self.class_count = get_class_count(class_count)[:-1]  # last item is for 255 (bg)
+            self.class_count = get_class_count(
+                class_count)[:-1]  # last item is for 255 (bg)
             delta = 1.0 / (self.class_count**0.25)
             delta = max_margin * (delta / np.max(delta))
             self.delta = torch.cuda.FloatTensor(delta)
         else:
             # compute deltas for every bag
             self.class_count = class_count
-            assert isinstance(class_count, list) and isinstance(class_count[0], np.ndarray)
+            assert isinstance(class_count, list) and isinstance(
+                class_count[0], np.ndarray)
             self.delta = []
             for bg_cls_cnt in class_count:
                 delta_ = 1.0 / (bg_cls_cnt**0.25)
@@ -48,17 +59,19 @@ class LDAMLoss(nn.Module):
                 delta_ = torch.cuda.FloatTensor(delta_)
                 self.delta.append(delta_)
 
-    def forward(self,
-                pred,  # logits
-                target,
-                weight=None,
-                avg_factor=None,
-                reduction_override=None,
-                ignore_index=255,
-                bag_idx=None):
+    def forward(
+            self,
+            pred,  # logits
+            target,
+            weight=None,
+            avg_factor=None,
+            reduction_override=None,
+            ignore_index=255,
+            bag_idx=None):
         assert reduction_override in (None, 'none', 'mean', 'sum')
 
-        reduction = (reduction_override if reduction_override else self.reduction)
+        reduction = (
+            reduction_override if reduction_override else self.reduction)
 
         if self.epoch_num > self.warm:
             self.loss_name = 'loss_ldam'
@@ -76,14 +89,27 @@ class LDAMLoss(nn.Module):
             mask_ignore = (target_expanded == 255)
             batch_target_[mask_ignore] = 0
 
-            delta_ = delta[None, :].reshape(1, -1, 1, 1).repeat(batch_target_.shape)
-            batch_delta = torch.gather(input=delta_, dim=1, index=batch_target_)
+            delta_ = delta[None, :].reshape(1, -1, 1,
+                                            1).repeat(batch_target_.shape)
+            batch_delta = torch.gather(
+                input=delta_, dim=1, index=batch_target_)
             diff = pred - batch_delta
-            one_hot_gt = torch.zeros_like(pred, dtype=torch.uint8).scatter_(1, batch_target_, 1)
+            one_hot_gt = torch.zeros_like(
+                pred, dtype=torch.uint8).scatter_(1, batch_target_, 1)
             output = torch.where(one_hot_gt.type(torch.bool), diff, pred)
-            loss = F.cross_entropy(self.scale * output, target, weight=self.class_weight, reduction="none", ignore_index=ignore_index)
+            loss = F.cross_entropy(
+                self.scale * output,
+                target,
+                weight=self.class_weight,
+                reduction='none',
+                ignore_index=ignore_index)
         else:
-            loss = F.cross_entropy(pred, target, weight=self.class_weight, reduction="none", ignore_index=ignore_index)
+            loss = F.cross_entropy(
+                pred,
+                target,
+                weight=self.class_weight,
+                reduction='none',
+                ignore_index=ignore_index)
 
         avg_factor = target.numel() - (target == ignore_index).sum().item()
         if reduction == 'mean':

@@ -49,8 +49,7 @@ def cross_entropy(pred,
         weight=class_weight,
         reduction='none',
         ignore_index=ignore_index,
-        label_smoothing=label_smoothing
-    )
+        label_smoothing=label_smoothing)
 
     # apply weights and do the reduction
     # average loss over non-ignored elements
@@ -107,8 +106,7 @@ def cross_entropy_softplus(pred,
         label,
         weight=class_weight,
         reduction='none',
-        ignore_index=ignore_index
-    )
+        ignore_index=ignore_index)
 
     # apply weights and do the reduction
     # average loss over non-ignored elements
@@ -276,17 +274,18 @@ class CrossEntropyLoss(nn.Module):
             `New in version 0.23.0.`
     """
 
-    def __init__(self,
-                 use_sigmoid=False,
-                 use_softplus=False,
-                 use_mask=False,
-                 reduction='mean',
-                 class_weight=None,
-                 loss_weight=1.0,
-                 loss_name='loss_ce',
-                 avg_non_ignore=False,
-                 label_smoothing=0.0,
-                 ):
+    def __init__(
+        self,
+        use_sigmoid=False,
+        use_softplus=False,
+        use_mask=False,
+        reduction='mean',
+        class_weight=None,
+        loss_weight=1.0,
+        loss_name='loss_ce',
+        avg_non_ignore=False,
+        label_smoothing=0.0,
+    ):
         super(CrossEntropyLoss, self).__init__()
         assert (use_sigmoid is False) or (use_mask is False)
         self.use_sigmoid = use_sigmoid
@@ -347,7 +346,7 @@ class CrossEntropyLoss(nn.Module):
             avg_non_ignore=self.avg_non_ignore,
             ignore_index=ignore_index,
             label_smoothing=self.label_smoothing,
-            ** kwargs)
+            **kwargs)
         return loss_cls
 
     @property
