@@ -17,7 +17,7 @@ class ParseEpochToDecodeHead(Hook):
         if hasattr(model.decode_head, 'epoch_num'):
             if model.decode_head.epoch_num != runner.epoch:
                 print_log(f'model is at epoch: {model.decode_head.epoch_num},'
-                          ' runner is at epoch: {runner.epoch}')
+                          f' runner is at epoch: {runner.epoch}')
 
         if hasattr(model.decode_head, 'kl_vals'):
             model = runner.model.module

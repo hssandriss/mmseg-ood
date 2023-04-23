@@ -258,10 +258,10 @@ class SegmenterMaskTransformerBllHead(BllBaseDecodeHead):
         input_dims = (b, c, h, w)
         if nsamples == 1 and self.density_type == 'flow':
             z0 = self.density_estimation.sample_base(1)
-            zk, sum_log_jacobians = self.density_estimation.forward_flow(
-                z0, None)
-            kl = -sum_log_jacobians.mean()
-            output = self.seg_forward(x, zk, input_dims)
+            zk, sum_log_jacobians = self.density_estimation.forward_flow(z0)
+            kl = self.density_estimation.flow_kl_loss(z0, zk,
+                                                      sum_log_jacobians)
+            output = self.seg_forward_x(x, zk, input_dims)
             return output, kl
         elif nsamples > 1 and self.density_type == 'flow':
             z0 = self.density_estimation.sample_base(nsamples)
@@ -293,7 +293,9 @@ class SegmenterMaskTransformerBllHead(BllBaseDecodeHead):
             raise NotImplementedError
 
     def seg_forward_x(self, feats, z, input_dims):
-        # Results into bs = feats.size(0)*z.size(0)
+        assert not feats.requires_grad, 'Backprop. on features !'
+        if self.training:
+            assert z.requires_grad, 'No Backprop. on density estimation !'
         b, c, h, w = input_dims
         # Force activate dropout during test
         # if not self.dropout.training:
@@ -304,8 +306,6 @@ class SegmenterMaskTransformerBllHead(BllBaseDecodeHead):
         z_list = torch.split(z, 1, 0)
         output = []
         for z_ in z_list:
-            if self.dropout and self.dropout.training:
-                feats = self.dropout(feats)
             self.patch_proj_w = z_.squeeze().reshape(self.patch_proj_w_shape)
             # self.classes_proj_w  = z_[self.patch_proj_numel:].reshape(
             #     self.classes_proj_shape)
@@ -325,11 +325,11 @@ class SegmenterMaskTransformerBllHead(BllBaseDecodeHead):
         return torch.cat(output, dim=0)
 
     def seg_forward(self, feats, z, input_dims):
-        # Results into bs = feats.size(0)
+        assert not feats.requires_grad, 'Backprop. on features !'
+        if self.training:
+            assert z.requires_grad, 'No Backprop. on density estimation !'
         b, c, h, w = input_dims
-        # Force activate dropout during test
-        # if not self.dropout.training:
-        #     self.dropout.train()
+
         if self.vi_use_lower_dim:
             z = self.density_estimation_to_params(z)
             assert z.size(-1) == self.ll_param_numel
@@ -338,8 +338,6 @@ class SegmenterMaskTransformerBllHead(BllBaseDecodeHead):
         feats_list = torch.split(feats, 1, 0)
         output = []
         for x_, z_ in zip(feats_list, z_list):
-            if self.dropout and self.dropout.training:
-                x_ = self.dropout(x_)
             z_ = z_.squeeze()
             self.patch_proj_w = z_[:self.patch_proj_numel].reshape(
                 self.patch_proj_w_shape)
