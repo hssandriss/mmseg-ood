@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from mmcv.cnn import ConvModule
 
 from ..builder import HEADS
-from .bll_decode_head import BllBaseDecodeHead
+from .bll_vi_decode_head import BllBaseDecodeHead
 from .decode_head import BaseDecodeHead
 
 
@@ -23,12 +23,7 @@ class FCNHead(BaseDecodeHead):
         dilation (int): The dilation rate for convs in the head. Default: 1.
     """
 
-    def __init__(self,
-                 num_convs=2,
-                 kernel_size=3,
-                 concat_input=True,
-                 dilation=1,
-                 **kwargs):
+    def __init__(self, num_convs=2, kernel_size=3, concat_input=True, dilation=1, **kwargs):
         assert num_convs >= 0 and dilation > 0 and isinstance(dilation, int)
         self.num_convs = num_convs
         self.concat_input = concat_input
@@ -42,29 +37,27 @@ class FCNHead(BaseDecodeHead):
         for i in range(num_convs):
             _in_channels = self.in_channels if i == 0 else self.channels
             convs.append(
-                ConvModule(
-                    _in_channels,
-                    self.channels,
-                    kernel_size=kernel_size,
-                    padding=conv_padding,
-                    dilation=dilation,
-                    conv_cfg=self.conv_cfg,
-                    norm_cfg=self.norm_cfg,
-                    act_cfg=self.act_cfg))
+                ConvModule(_in_channels,
+                           self.channels,
+                           kernel_size=kernel_size,
+                           padding=conv_padding,
+                           dilation=dilation,
+                           conv_cfg=self.conv_cfg,
+                           norm_cfg=self.norm_cfg,
+                           act_cfg=self.act_cfg))
 
         if len(convs) == 0:
             self.convs = nn.Identity()
         else:
             self.convs = nn.Sequential(*convs)
         if self.concat_input:
-            self.conv_cat = ConvModule(
-                self.in_channels + self.channels,
-                self.channels,
-                kernel_size=kernel_size,
-                padding=kernel_size // 2,
-                conv_cfg=self.conv_cfg,
-                norm_cfg=self.norm_cfg,
-                act_cfg=self.act_cfg)
+            self.conv_cat = ConvModule(self.in_channels + self.channels,
+                                       self.channels,
+                                       kernel_size=kernel_size,
+                                       padding=kernel_size // 2,
+                                       conv_cfg=self.conv_cfg,
+                                       norm_cfg=self.norm_cfg,
+                                       act_cfg=self.act_cfg)
 
     def _forward_feature(self, inputs):
         """Forward function for feature maps before classifying each pixel with
@@ -104,17 +97,12 @@ class FCNBllHead(BllBaseDecodeHead):
         dilation (int): The dilation rate for convs in the head. Default: 1.
     """
 
-    def __init__(self,
-                 num_convs=2,
-                 kernel_size=3,
-                 concat_input=True,
-                 dilation=1,
-                 **kwargs):
+    def __init__(self, num_convs=2, kernel_size=3, concat_input=True, dilation=1, **kwargs):
         assert num_convs >= 0 and dilation > 0 and isinstance(dilation, int)
         self.num_convs = num_convs
         self.concat_input = concat_input
         self.kernel_size = kernel_size
-        super(FCNHead, self).__init__(**kwargs)
+        super(FCNBllHead, self).__init__(**kwargs)
         if num_convs == 0:
             assert self.in_channels == self.channels
 
@@ -123,29 +111,37 @@ class FCNBllHead(BllBaseDecodeHead):
         for i in range(num_convs):
             _in_channels = self.in_channels if i == 0 else self.channels
             convs.append(
-                ConvModule(
-                    _in_channels,
-                    self.channels,
-                    kernel_size=kernel_size,
-                    padding=conv_padding,
-                    dilation=dilation,
-                    conv_cfg=self.conv_cfg,
-                    norm_cfg=self.norm_cfg,
-                    act_cfg=self.act_cfg))
+                ConvModule(_in_channels,
+                           self.channels,
+                           kernel_size=kernel_size,
+                           padding=conv_padding,
+                           dilation=dilation,
+                           conv_cfg=self.conv_cfg,
+                           norm_cfg=self.norm_cfg,
+                           act_cfg=self.act_cfg))
 
         if len(convs) == 0:
             self.convs = nn.Identity()
         else:
             self.convs = nn.Sequential(*convs)
         if self.concat_input:
-            self.conv_cat = ConvModule(
-                self.in_channels + self.channels,
-                self.channels,
-                kernel_size=kernel_size,
-                padding=kernel_size // 2,
-                conv_cfg=self.conv_cfg,
-                norm_cfg=self.norm_cfg,
-                act_cfg=self.act_cfg)
+            self.conv_cat = ConvModule(self.in_channels + self.channels,
+                                       self.channels,
+                                       kernel_size=kernel_size,
+                                       padding=kernel_size // 2,
+                                       conv_cfg=self.conv_cfg,
+                                       norm_cfg=self.norm_cfg,
+                                       act_cfg=self.act_cfg)
+
+        self.w_shape = self.conv_seg.weight.shape
+        self.b_shape = self.conv_seg.bias.shape
+
+        self.w_numel = self.conv_seg.weight.numel()
+        self.b_numel = self.conv_seg.bias.numel()
+
+        self.ll_param_numel = self.w_numel + self.b_numel
+        self.density_estimation_to_params = nn.Linear(self.vi_latent_dim, self.ll_param_numel, bias=False)
+        self.build_density_estimator()
 
     def _forward_feature(self, inputs):
         """Forward function for feature maps before classifying each pixel with
@@ -163,7 +159,7 @@ class FCNBllHead(BllBaseDecodeHead):
         if self.concat_input:
             feats = self.conv_cat(torch.cat([x, feats], dim=1))
 
-        return feats
+        return feats, None
 
     def forward(self, inputs, nsamples):
         """Forward function."""
@@ -175,70 +171,38 @@ class FCNBllHead(BllBaseDecodeHead):
         assert output.is_leaf, 'you are backpropagating on feature extractor!'
         # torch.cuda.synchronize()
         # t1 = time.time()
-        if nsamples == 1 and self.density_type == 'flow':
-            # z0 = self.density_estimation.z0_mean.data.unsqueeze(0)
-            z0 = self.density_estimation.sample_base(1)
-            zk, sum_log_jacobians = self.density_estimation.forward_flow(
-                z0, low_feats)
+        if self.density_type == 'flow':
+
+            if nsamples == 1:
+                z0 = self.density_estimation.z0_mean
+            else:
+                z0 = self.density_estimation.sample_base(nsamples)
+            zk, sum_log_jacobians = self.density_estimation.forward_flow(z0, low_feats)
             output = self.cls_seg_x(output, zk)
             # Reverse KLD: https://arxiv.org/abs/1912.02762 page 7 Eq. 17-18
-            kl = -sum_log_jacobians.mean()
-            # kl = self.density_estimation.flow_kl_loss(z0,
-            #                                           zk, sum_log_jacobians)
-            # kl = self.density_estimation.flow_kl_loss_analytical(
-            #     sum_log_jacobians)
+            kl = self.density_estimation.flow_kl_loss(z0, zk, sum_log_jacobians)
             return output, kl
-        elif nsamples > 1 and self.density_type == 'flow':
-            z0 = self.density_estimation.sample_base(nsamples)
-            zk, sum_log_jacobians = self.density_estimation.forward_flow(
-                z0, low_feats)
-            output = self.cls_seg_x(output, zk)
-            # Reverse KLD: https://arxiv.org/abs/1912.02762 page 7 Eq. 17-18
-            kl = self.density_estimation.flow_kl_loss(z0, zk,
-                                                      sum_log_jacobians)
-            # kl = self.density_estimation.flow_kl_loss_analytical(
-            #     sum_log_jacobians)
-            return output, kl
-        elif nsamples == 1 and self.density_type == 'conditional_flow':
-            z0 = self.density_estimation.z0_mean.data.unsqueeze(0)
-            zk, sum_log_jacobians = self.density_estimation.forward_flow(
-                z0, low_feats)
-            output = self.cls_seg(output, zk)
-            # Reverse KLD: https://arxiv.org/abs/1912.02762 page 7 Eq. 17-18
-            # kl = - sum_log_jacobians.mean()
-            kl = self.density_estimation.flow_kl_loss(z0, zk,
-                                                      sum_log_jacobians)
-            # kl = self.density_estimation.flow_kl_loss_analytical(
-            #     sum_log_jacobians)
-            return output, kl
-        elif nsamples > 1 and self.density_type == 'conditional_flow':
-            z0 = self.density_estimation.sample_base(nsamples)
-            zk, sum_log_jacobians = self.density_estimation.forward_flow(
-                z0, low_feats)
+        elif self.density_type == 'conditional_flow':
+            if nsamples == 1:
+                z0 = self.density_estimation.z0_mean
+            else:
+                z0 = self.density_estimation.sample_base(nsamples)
+            zk, sum_log_jacobians = self.density_estimation.forward_flow(z0, low_feats)
             if self.training:
                 output = self.cls_seg(output, zk)
             else:
                 output = self.cls_seg_x(output, zk)
             # Reverse KLD: https://arxiv.org/abs/1912.02762 page 7 Eq. 17-18
-            # kl = - sum_log_jacobians.mean()
-            kl = self.density_estimation.flow_kl_loss(z0, zk,
-                                                      sum_log_jacobians)
-            # kl = self.density_estimation.flow_kl_loss_analytical(
-            #     sum_log_jacobians)
+            kl = self.density_estimation.flow_kl_loss(z0, zk, sum_log_jacobians)
+            return output, kl
+        elif self.density_type in ('full_normal', 'fact_normal'):
+            L = self.density_estimation._L
+            if nsamples == 1:
+                zk = self.density_estimation.mu.data.unsqueeze(0)
+            elif nsamples > 1:
+                z0 = self.density_estimation.sample_base(nsamples)
+                zk = self.density_estimation.forward_normal(z0, L)
 
-            return output, kl
-        elif nsamples == 1 and self.density_type in ('full_normal',
-                                                     'fact_normal'):
-            L = self.density_estimation._L
-            zk = self.density_estimation.mu.data.unsqueeze(0)
-            kl = self.density_estimation.normal_kl_loss(L)
-            output = self.cls_seg_x(output, zk)
-            return output, kl
-        elif nsamples > 1 and self.density_type in ('full_normal',
-                                                    'fact_normal'):
-            L = self.density_estimation._L
-            z0 = self.density_estimation.sample_base(nsamples)
-            zk = self.density_estimation.forward_normal(z0, L)
             kl = self.density_estimation.normal_kl_loss(L)
             output = self.cls_seg_x(output, zk)
             return output, kl
@@ -254,14 +218,15 @@ class FCNBllHead(BllBaseDecodeHead):
         # if not self.dropout.training:
         #     self.dropout.train()
         for z_ in z_list:
-            dropout_x = self.dropout(x)
-            # dropout_x = x
+            if self.dropout is not None:
+                x_ = self.dropout(x)
+            else:
+                x_ = x
             z_ = z_.squeeze()
             output.append(
-                F.conv2d(
-                    input=dropout_x,
-                    weight=z_[:self.w_numel].reshape(self.w_shape),
-                    bias=z_[-self.b_numel:].reshape(self.b_shape)))
+                F.conv2d(input=x_,
+                         weight=z_[:self.w_numel].reshape(self.w_shape),
+                         bias=z_[-self.b_numel:].reshape(self.b_shape)))
         return torch.cat(output, dim=0)
 
     def conv_seg_forward(self, x, z):
@@ -278,9 +243,8 @@ class FCNBllHead(BllBaseDecodeHead):
             dropout_x = self.dropout(x_)
             z_ = z_.squeeze()
             output.append(
-                F.conv2d(
-                    input=dropout_x,
-                    weight=z_[:self.w_numel].reshape(self.w_shape),
-                    bias=z_[-self.b_numel:].reshape(self.b_shape)))
+                F.conv2d(input=dropout_x,
+                         weight=z_[:self.w_numel].reshape(self.w_shape),
+                         bias=z_[-self.b_numel:].reshape(self.b_shape)))
         assert len(output) == z.size(0)
         return torch.cat(output, dim=0)

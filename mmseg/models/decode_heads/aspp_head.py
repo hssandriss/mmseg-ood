@@ -6,7 +6,7 @@ from mmcv.cnn import ConvModule
 
 from mmseg.ops import resize
 from ..builder import HEADS
-from .bll_decode_head import BllBaseDecodeHead
+from .bll_vi_decode_head import BllBaseDecodeHead
 from .decode_head import BaseDecodeHead
 
 
@@ -285,12 +285,11 @@ class ASPPBllHead(BllBaseDecodeHead):
 
     def conv_seg_forward_x(self, x, z):
         if self.vi_use_lower_dim:
+            # decode latent variable
             z = self.density_estimation_to_params(z)
             assert z.size(-1) == self.ll_param_numel
         z_list = torch.split(z, 1, 0)
         output = []
-        # if not self.dropout.training:
-        #     self.dropout.train()
         for z_ in z_list:
             dropout_x = self.dropout(x)
             # dropout_x = x

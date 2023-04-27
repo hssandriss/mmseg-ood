@@ -9,7 +9,7 @@ from mmcv.runner import ModuleList
 
 from mmseg.models.backbones.vit import TransformerEncoderLayer
 from ..builder import HEADS
-from .bll_decode_head import BllBaseDecodeHead
+from .bll_vi_decode_head import BllBaseDecodeHead
 from .decode_head import BaseDecodeHead
 
 

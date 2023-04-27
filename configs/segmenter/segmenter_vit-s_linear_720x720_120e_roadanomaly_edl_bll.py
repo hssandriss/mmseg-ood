@@ -16,14 +16,15 @@ model = dict(
     ),
     decode_head=dict(
         _delete_=True,
-        type='FCNHead',
+        type='FCNBllHead',
         in_channels=384,
         channels=384,
         num_convs=0,
         dropout_ratio=0.0,
         concat_input=False,
         num_classes=19,
-        loss_decode=dict(type='EDLLoss', num_classes=19)))
+        loss_decode=dict(type='EDLLoss', num_classes=19)),
+    test_cfg=dict(mode='whole'))
 
 optimizer = dict(lr=0.001, weight_decay=0.0)
 data = dict(

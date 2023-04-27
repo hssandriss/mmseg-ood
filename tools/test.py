@@ -25,97 +25,64 @@ from mmseg.utils import build_ddp, build_dp, get_device, setup_multi_processes
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(
-        description='mmseg test (and eval) a model')
+    parser = argparse.ArgumentParser(description='mmseg test (and eval) a model')
     parser.add_argument('config', help='test config file path')
 
-    parser.add_argument(
-        '--work-dir',
-        help=('if specified, the evaluation metric results will be dumped'
-              'into the directory as json'))
-    parser.add_argument(
-        '--aug-test', action='store_true', help='Use Flip and Multi scale aug')
+    parser.add_argument('--work-dir',
+                        help=('if specified, the evaluation metric results will be dumped'
+                              'into the directory as json'))
+    parser.add_argument('--aug-test', action='store_true', help='Use Flip and Multi scale aug')
     parser.add_argument('--out', help='output result file in pickle format')
-    parser.add_argument(
-        '--format-only',
-        action='store_true',
-        help='Format the output results without perform evaluation. It is'
-        'useful when you want to format the result to a specific format and '
-        'submit it to the test server')
-    parser.add_argument(
-        '--eval',
-        type=str,
-        nargs='+',
-        help='evaluation metrics, which depends on the dataset, e.g., "mIoU"'
-        ' for generic datasets, and "cityscapes" for Cityscapes')
+    parser.add_argument('--format-only',
+                        action='store_true',
+                        help='Format the output results without perform evaluation. It is'
+                        'useful when you want to format the result to a specific format and '
+                        'submit it to the test server')
+    parser.add_argument('--eval',
+                        type=str,
+                        nargs='+',
+                        help='evaluation metrics, which depends on the dataset, e.g., "mIoU"'
+                        ' for generic datasets, and "cityscapes" for Cityscapes')
     parser.add_argument('--show', action='store_true', help='show results')
-    parser.add_argument(
-        '--show-dir', help='directory where painted images will be saved')
-    parser.add_argument(
-        '--use-bags',
-        action='store_true',
-        help='determines weather to use bags of predictors')
-    parser.add_argument(
-        '--bags-mul',
-        type=int,
-        default=10,
-        help='determines weather to use bags of predictors')
-    parser.add_argument(
-        '--all',
-        action='store_true',
-        help='determines weather to test all checkpoints')
-    parser.add_argument(
-        '--gpu-collect',
-        action='store_true',
-        help='whether to use gpu to collect results.')
-    parser.add_argument(
-        '--fusion', choices=['af', 'wf'], default='af', help='job launcher')
-    parser.add_argument(
-        '--gpu-id',
-        type=int,
-        default=0,
-        help='id of gpu to use '
-        '(only applicable to non-distributed testing)')
-    parser.add_argument(
-        '--tmpdir',
-        help='tmp directory used for collecting results from multiple '
-        'workers, available when gpu_collect is not specified')
-    parser.add_argument(
-        '--options',
-        nargs='+',
-        action=DictAction,
-        help="--options is deprecated in favor of --cfg_options' and it will "
-        'not be supported in version v0.22.0. Override some settings in the '
-        'used config, the key-value pair in xxx=yyy format will be merged '
-        'into config file. If the value to be overwritten is a list, it '
-        'should be like key="[a,b]" or key=a,b It also allows nested '
-        'list/tuple values, e.g. key="[(a,b),(c,d)]" Note that the quotation '
-        'marks are necessary and that no white space is allowed.')
-    parser.add_argument(
-        '--cfg-options',
-        nargs='+',
-        action=DictAction,
-        help='override some settings in the used config, the key-value pair '
-        'in xxx=yyy format will be merged into config file. If the value to '
-        'be overwritten is a list, it should be like key="[a,b]" or key=a,b '
-        'It also allows nested list/tuple values, e.g. key="[(a,b),(c,d)]" '
-        'Note that the quotation marks are necessary and that no white space '
-        'is allowed.')
-    parser.add_argument(
-        '--eval-options',
-        nargs='+',
-        action=DictAction,
-        help='custom options for evaluation')
-    parser.add_argument(
-        '--launcher',
-        choices=['none', 'pytorch', 'slurm', 'mpi'],
-        default='none',
-        help='job launcher')
-    parser.add_argument(
-        '--opacity',
-        type=float,
-        default=0.5,
-        help='Opacity of painted segmentation map. In (0, 1] range.')
+    parser.add_argument('--show-dir', help='directory where painted images will be saved')
+    parser.add_argument('--use-bags', action='store_true', help='determines weather to use bags of predictors')
+    parser.add_argument('--bags-mul', type=int, default=10, help='determines weather to use bags of predictors')
+    parser.add_argument('--all', action='store_true', help='determines weather to test all checkpoints')
+    parser.add_argument('--gpu-collect', action='store_true', help='whether to use gpu to collect results.')
+    parser.add_argument('--fusion', choices=['af', 'wf'], default='af', help='job launcher')
+    parser.add_argument('--gpu-id',
+                        type=int,
+                        default=0,
+                        help='id of gpu to use '
+                        '(only applicable to non-distributed testing)')
+    parser.add_argument('--tmpdir',
+                        help='tmp directory used for collecting results from multiple '
+                        'workers, available when gpu_collect is not specified')
+    parser.add_argument('--options',
+                        nargs='+',
+                        action=DictAction,
+                        help="--options is deprecated in favor of --cfg_options' and it will "
+                        'not be supported in version v0.22.0. Override some settings in the '
+                        'used config, the key-value pair in xxx=yyy format will be merged '
+                        'into config file. If the value to be overwritten is a list, it '
+                        'should be like key="[a,b]" or key=a,b It also allows nested '
+                        'list/tuple values, e.g. key="[(a,b),(c,d)]" Note that the quotation '
+                        'marks are necessary and that no white space is allowed.')
+    parser.add_argument('--cfg-options',
+                        nargs='+',
+                        action=DictAction,
+                        help='override some settings in the used config, the key-value pair '
+                        'in xxx=yyy format will be merged into config file. If the value to '
+                        'be overwritten is a list, it should be like key="[a,b]" or key=a,b '
+                        'It also allows nested list/tuple values, e.g. key="[(a,b),(c,d)]" '
+                        'Note that the quotation marks are necessary and that no white space '
+                        'is allowed.')
+    parser.add_argument('--eval-options', nargs='+', action=DictAction, help='custom options for evaluation')
+    parser.add_argument('--launcher', choices=['none', 'pytorch', 'slurm', 'mpi'], default='none', help='job launcher')
+    parser.add_argument('--opacity',
+                        type=float,
+                        default=0.5,
+                        help='Opacity of painted segmentation map. In (0, 1] range.')
     # When using PyTorch version >= 2.0.0, the `torch.distributed.launch`
     # will pass the `--local-rank` parameter to `tools/train.py` instead
     # of `--local_rank`.
@@ -125,10 +92,9 @@ def parse_args():
         os.environ['LOCAL_RANK'] = str(args.local_rank)
 
     if args.options and args.cfg_options:
-        raise ValueError(
-            '--options and --cfg-options cannot be both '
-            'specified, --options is deprecated in favor of --cfg-options. '
-            '--options will not be supported in version v0.22.0.')
+        raise ValueError('--options and --cfg-options cannot be both '
+                         'specified, --options is deprecated in favor of --cfg-options. '
+                         '--options will not be supported in version v0.22.0.')
     if args.options:
         warnings.warn('--options is deprecated in favor of --cfg-options. '
                       '--options will not be supported in version v0.22.0.')
@@ -178,9 +144,7 @@ def main():
 
     if args.aug_test:
         # hard code index
-        cfg.data.test.pipeline[1].img_ratios = [
-            0.5, 0.75, 1.0, 1.25, 1.5, 1.75
-        ]
+        cfg.data.test.pipeline[1].img_ratios = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75]
         cfg.data.test.pipeline[1].flip = True
     cfg.model.pretrained = None
     cfg.data.test.test_mode = True
@@ -207,22 +171,17 @@ def main():
         mmcv.mkdir_or_exist(osp.abspath(args.work_dir))
         timestamp = time.strftime('%Y%m%d_%H%M%S', time.localtime())
         if args.aug_test:
-            json_file = osp.join(args.work_dir,
-                                 f'eval_multi_scale_{timestamp}.json')
+            json_file = osp.join(args.work_dir, f'eval_multi_scale_{timestamp}.json')
         else:
-            json_file = osp.join(args.work_dir,
-                                 f'eval_single_scale_{timestamp}.json')
+            json_file = osp.join(args.work_dir, f'eval_single_scale_{timestamp}.json')
     elif rank == 0:
-        work_dir = osp.join('./work_dirs',
-                            osp.splitext(osp.basename(args.config))[0])
+        work_dir = osp.join('./work_dirs', osp.splitext(osp.basename(args.config))[0])
         mmcv.mkdir_or_exist(osp.abspath(work_dir))
         timestamp = time.strftime('%Y%m%d_%H%M%S', time.localtime())
         if args.aug_test:
-            json_file = osp.join(work_dir,
-                                 f'eval_multi_scale_{timestamp}.json')
+            json_file = osp.join(work_dir, f'eval_multi_scale_{timestamp}.json')
         else:
-            json_file = osp.join(work_dir,
-                                 f'eval_single_scale_{timestamp}.json')
+            json_file = osp.join(work_dir, f'eval_single_scale_{timestamp}.json')
 
     # build the dataloader
     # TODO: support multiple images per gpu (only minor changes are needed)
@@ -240,10 +199,8 @@ def main():
     # The overall dataloader settings
     loader_cfg.update({
         k: v
-        for k, v in cfg.data.items() if k not in [
-            'train', 'val', 'test', 'train_dataloader', 'val_dataloader',
-            'test_dataloader'
-        ]
+        for k, v in cfg.data.items()
+        if k not in ['train', 'val', 'test', 'train_dataloader', 'val_dataloader', 'test_dataloader']
     })
     test_loader_cfg = {
         **loader_cfg,
@@ -254,17 +211,14 @@ def main():
     # build the dataloader
     data_loader = build_dataloader(dataset, **test_loader_cfg)
     all_checkpoints = [
-        os.path.join(args.work_dir, file) for file in os.listdir(args.work_dir)
+        os.path.join(args.work_dir, file)
+        for file in os.listdir(args.work_dir)
         if file.endswith('.pth') and file != 'latest.pth'
     ]
-    all_checkpoints.sort(key=lambda file: int(
-        re.search(r'(?:epoch)_([0-9]+).(?:pth)$', osp.basename(file)).groups()[
-            0]))
+    all_checkpoints.sort(
+        key=lambda file: int(re.search(r'(?:epoch)_([0-9]+).(?:pth)$', osp.basename(file)).groups()[0]))
     all_checkpoints_iter = [
-        int(
-            re.search(r'(?:epoch)_([0-9]+).(?:pth)$',
-                      osp.basename(file)).groups()[0])
-        for file in all_checkpoints
+        int(re.search(r'(?:epoch)_([0-9]+).(?:pth)$', osp.basename(file)).groups()[0]) for file in all_checkpoints
     ]
 
     # indices_to_keep = [i for i, x in enumerate(all_checkpoints_iter)
@@ -273,25 +227,20 @@ def main():
     # all_checkpoints_iter = [all_checkpoints_iter[i] for i in indices_to_keep]
 
     reg_ood_summary = pd.DataFrame(columns=[
-        'epoch', 'max_prob.auroc', 'max_prob.aupr', 'max_prob.fpr95',
-        'max_logit.auroc', 'max_logit.aupr', 'max_logit.fpr95',
-        'emp_entropy.auroc', 'emp_entropy.aupr', 'emp_entropy.fpr95'
+        'epoch', 'max_prob.auroc', 'max_prob.aupr', 'max_prob.fpr95', 'max_logit.auroc', 'max_logit.aupr',
+        'max_logit.fpr95', 'emp_entropy.auroc', 'emp_entropy.aupr', 'emp_entropy.fpr95'
     ])
     sl_ood_summary = pd.DataFrame(columns=[
-        'epoch', 'u.auroc', 'u.aupr', 'u.fpr95', 'disonnance.auroc',
-        'disonnance.aupr', 'disonnance.fpr95', 'dir_entropy.auroc',
-        'dir_entropy.aupr', 'dir_entropy.fpr95'
+        'epoch', 'u.auroc', 'u.aupr', 'u.fpr95', 'disonnance.auroc', 'disonnance.aupr', 'disonnance.fpr95',
+        'dir_entropy.auroc', 'dir_entropy.aupr', 'dir_entropy.fpr95'
     ])
 
     if not args.all:
-        index_last = max(
-            range(len(all_checkpoints_iter)),
-            key=all_checkpoints_iter.__getitem__)
+        index_last = max(range(len(all_checkpoints_iter)), key=all_checkpoints_iter.__getitem__)
         all_checkpoints = [all_checkpoints[index_last]]
         all_checkpoints_iter = [all_checkpoints_iter[index_last]]
     if args.all:
-        writer = SummaryWriter(
-            log_dir=os.path.join(args.work_dir, 'tf_logs_test'))
+        writer = SummaryWriter(log_dir=os.path.join(args.work_dir, 'tf_logs_test'))
     ans = []
 
     for i, checkpoint in enumerate(all_checkpoints):
@@ -319,13 +268,12 @@ def main():
             setattr(model.decode_head, 'use_bags', True)
             setattr(
                 model.decode_head, 'bags_kwargs',
-                dict(
-                    num_bags=dataset.num_bags,
-                    label2bag=dataset.label2bag,
-                    bag_label_maps=dataset.bag_label_maps,
-                    bag_masks=dataset.bag_masks,
-                    bags_classes=dataset.bags_classes,
-                    bag_class_counts=dataset.bag_class_counts))
+                dict(num_bags=dataset.num_bags,
+                     label2bag=dataset.label2bag,
+                     bag_label_maps=dataset.bag_label_maps,
+                     bag_masks=dataset.bag_masks,
+                     bags_classes=dataset.bags_classes,
+                     bag_class_counts=dataset.bag_class_counts))
         else:
             setattr(model.decode_head, 'use_bags', False)
 
@@ -336,13 +284,11 @@ def main():
         # Deprecated
         efficient_test = eval_kwargs.get('efficient_test', False)
         if efficient_test:
-            warnings.warn(
-                '``efficient_test=True`` does not have effect in '
-                'tools/test.py, the evaluation and format results are CPU '
-                'memory efficient by default')
+            warnings.warn('``efficient_test=True`` does not have effect in '
+                          'tools/test.py, the evaluation and format results are CPU '
+                          'memory efficient by default')
 
-        eval_on_format_results = (
-            args.eval is not None and 'cityscapes' in args.eval)
+        eval_on_format_results = (args.eval is not None and 'cityscapes' in args.eval)
         if eval_on_format_results:
             assert len(args.eval) == 1, 'eval on format results is not ' \
                                         'applicable for metrics other than ' \
@@ -359,52 +305,44 @@ def main():
 
         cfg.device = get_device()
         if not distributed:
-            warnings.warn(
-                'SyncBN is only supported with DDP. To be compatible with DP, '
-                'we convert SyncBN to BN. Please use dist_train.sh which can '
-                'avoid this error.')
+            warnings.warn('SyncBN is only supported with DDP. To be compatible with DP, '
+                          'we convert SyncBN to BN. Please use dist_train.sh which can '
+                          'avoid this error.')
             if not torch.cuda.is_available():
                 assert digit_version(mmcv.__version__) >= \
                     digit_version('1.4.4'), 'Please use MMCV >= 1.4.4' \
                                             ' for CPU training!'
             model = revert_sync_batchnorm(model)
             model = build_dp(model, cfg.device, device_ids=cfg.gpu_ids)
-            results = single_gpu_test(
-                model,
-                data_loader,
-                args.show,
-                args.show_dir,
-                False,
-                args.opacity,
-                pre_eval=args.eval is not None and not eval_on_format_results,
-                format_only=args.format_only or eval_on_format_results,
-                format_args=eval_kwargs,
-                fusion_method=fusion_method,
-                work_dir=args.work_dir)
+            results = single_gpu_test(model,
+                                      data_loader,
+                                      args.show,
+                                      args.show_dir,
+                                      False,
+                                      args.opacity,
+                                      pre_eval=args.eval is not None and not eval_on_format_results,
+                                      format_only=args.format_only or eval_on_format_results,
+                                      format_args=eval_kwargs,
+                                      fusion_method=fusion_method,
+                                      work_dir=args.work_dir)
         else:
-            model = build_ddp(
-                model,
-                cfg.device,
-                device_ids=[int(os.environ['LOCAL_RANK'])],
-                broadcast_buffers=False)
-            results = multi_gpu_test(
-                model,
-                data_loader,
-                args.tmpdir,
-                args.gpu_collect,
-                False,
-                pre_eval=args.eval is not None and not eval_on_format_results,
-                format_only=args.format_only or eval_on_format_results,
-                format_args=eval_kwargs)
+            model = build_ddp(model, cfg.device, device_ids=[int(os.environ['LOCAL_RANK'])], broadcast_buffers=False)
+            results = multi_gpu_test(model,
+                                     data_loader,
+                                     args.tmpdir,
+                                     args.gpu_collect,
+                                     False,
+                                     pre_eval=args.eval is not None and not eval_on_format_results,
+                                     format_only=args.format_only or eval_on_format_results,
+                                     format_args=eval_kwargs)
 
         rank, _ = get_dist_info()
         if rank == 0:
             if args.out:
-                warnings.warn(
-                    'The behavior of ``args.out`` has been changed since '
-                    'MMSeg v0.16, the pickled outputs could be seg map as '
-                    'type of np.array, pre-eval results or file paths for '
-                    '``dataset.format_results()``.')
+                warnings.warn('The behavior of ``args.out`` has been changed since '
+                              'MMSeg v0.16, the pickled outputs could be seg map as '
+                              'type of np.array, pre-eval results or file paths for '
+                              '``dataset.format_results()``.')
                 print(f'\nwriting results to {args.out}')
                 mmcv.dump(results, args.out)
             if args.eval:
@@ -417,103 +355,56 @@ def main():
                     # remove tmp dir when cityscapes evaluation
                     shutil.rmtree(tmpdir)
                 curr_res = {}
-                reg_ood_valid = metric_dict['metric'].pop(
-                    'reg_ood_valid', False)
+                reg_ood_valid = metric_dict['metric'].pop('reg_ood_valid', False)
                 sl_ood_valid = metric_dict['metric'].pop('sl_ood_valid', False)
-                in_dist_valid = metric_dict['metric'].pop(
-                    'in_dist_valid', False)
+                in_dist_valid = metric_dict['metric'].pop('in_dist_valid', False)
                 if reg_ood_valid:
-                    curr_iter_reg_ood_df = pd.DataFrame(
-                        data=[[
-                            all_checkpoints_iter[i],
-                            round(
-                                float(metric_dict['metric']['max_prob.auroc']),
-                                4),
-                            round(
-                                float(metric_dict['metric']['max_prob.aupr']),
-                                4),
-                            round(
-                                float(metric_dict['metric']['max_prob.fpr95']),
-                                4),
-                            round(
-                                float(
-                                    metric_dict['metric']['max_logit.auroc']),
-                                4),
-                            round(
-                                float(metric_dict['metric']['max_logit.aupr']),
-                                4),
-                            round(
-                                float(
-                                    metric_dict['metric']['max_logit.fpr95']),
-                                4),
-                            round(
-                                float(metric_dict['metric']
-                                      ['emp_entropy.auroc']), 4),
-                            round(
-                                float(
-                                    metric_dict['metric']['emp_entropy.aupr']),
-                                4),
-                            round(
-                                float(metric_dict['metric']
-                                      ['emp_entropy.fpr95']), 4)
-                        ]],
-                        columns=[
-                            'epoch', 'max_prob.auroc', 'max_prob.aupr',
-                            'max_prob.fpr95', 'max_logit.auroc',
-                            'max_logit.aupr', 'max_logit.fpr95',
-                            'emp_entropy.auroc', 'emp_entropy.aupr',
-                            'emp_entropy.fpr95'
-                        ])
-                    reg_ood_summary = reg_ood_summary.append(
-                        curr_iter_reg_ood_df, ignore_index=True)
+                    curr_iter_reg_ood_df = pd.DataFrame(data=[[
+                        all_checkpoints_iter[i],
+                        round(float(metric_dict['metric']['max_prob.auroc']), 4),
+                        round(float(metric_dict['metric']['max_prob.aupr']), 4),
+                        round(float(metric_dict['metric']['max_prob.fpr95']), 4),
+                        round(float(metric_dict['metric']['max_logit.auroc']), 4),
+                        round(float(metric_dict['metric']['max_logit.aupr']), 4),
+                        round(float(metric_dict['metric']['max_logit.fpr95']), 4),
+                        round(float(metric_dict['metric']['emp_entropy.auroc']), 4),
+                        round(float(metric_dict['metric']['emp_entropy.aupr']), 4),
+                        round(float(metric_dict['metric']['emp_entropy.fpr95']), 4)
+                    ]],
+                                                        columns=[
+                                                            'epoch', 'max_prob.auroc', 'max_prob.aupr',
+                                                            'max_prob.fpr95', 'max_logit.auroc', 'max_logit.aupr',
+                                                            'max_logit.fpr95', 'emp_entropy.auroc', 'emp_entropy.aupr',
+                                                            'emp_entropy.fpr95'
+                                                        ])
+                    reg_ood_summary = reg_ood_summary.append(curr_iter_reg_ood_df, ignore_index=True)
 
                     for a in ('max_prob', 'max_logit', 'emp_entropy'):
                         for b in ('auroc', 'aupr', 'fpr95'):
-                            curr_res[f'{a}.{b}'] = float(
-                                metric_dict['metric'][f'{a}.{b}'])
+                            curr_res[f'{a}.{b}'] = float(metric_dict['metric'][f'{a}.{b}'])
                 if sl_ood_valid:
-                    curr_iter_sl_ood_df = pd.DataFrame(
-                        data=[[
-                            all_checkpoints_iter[i],
-                            round(float(metric_dict['metric']['u.auroc']), 4),
-                            round(float(metric_dict['metric']['u.aupr']), 4),
-                            round(float(metric_dict['metric']['u.fpr95']), 4),
-                            round(
-                                float(
-                                    metric_dict['metric']['disonnance.auroc']),
-                                4),
-                            round(
-                                float(
-                                    metric_dict['metric']['disonnance.aupr']),
-                                4),
-                            round(
-                                float(
-                                    metric_dict['metric']['disonnance.fpr95']),
-                                4),
-                            round(
-                                float(metric_dict['metric']
-                                      ['dir_entropy.auroc']), 4),
-                            round(
-                                float(
-                                    metric_dict['metric']['dir_entropy.aupr']),
-                                4),
-                            round(
-                                float(metric_dict['metric']
-                                      ['dir_entropy.fpr95']), 4)
-                        ]],
-                        columns=[
-                            'epoch', 'u.auroc', 'u.aupr', 'u.fpr95',
-                            'dissonance.auroc', 'dissonance.aupr',
-                            'dissonance.fpr95', 'dir_entropy.auroc',
-                            'dir_entropy.aupr', 'dir_entropy.fpr95'
-                        ])
-                    sl_ood_summary = sl_ood_summary.append(
-                        curr_iter_sl_ood_df, ignore_index=True)
+                    curr_iter_sl_ood_df = pd.DataFrame(data=[[
+                        all_checkpoints_iter[i],
+                        round(float(metric_dict['metric']['u.auroc']), 4),
+                        round(float(metric_dict['metric']['u.aupr']), 4),
+                        round(float(metric_dict['metric']['u.fpr95']), 4),
+                        round(float(metric_dict['metric']['disonnance.auroc']), 4),
+                        round(float(metric_dict['metric']['disonnance.aupr']), 4),
+                        round(float(metric_dict['metric']['disonnance.fpr95']), 4),
+                        round(float(metric_dict['metric']['dir_entropy.auroc']), 4),
+                        round(float(metric_dict['metric']['dir_entropy.aupr']), 4),
+                        round(float(metric_dict['metric']['dir_entropy.fpr95']), 4)
+                    ]],
+                                                       columns=[
+                                                           'epoch', 'u.auroc', 'u.aupr', 'u.fpr95', 'dissonance.auroc',
+                                                           'dissonance.aupr', 'dissonance.fpr95', 'dir_entropy.auroc',
+                                                           'dir_entropy.aupr', 'dir_entropy.fpr95'
+                                                       ])
+                    sl_ood_summary = sl_ood_summary.append(curr_iter_sl_ood_df, ignore_index=True)
 
                     for a in ('u', 'disonnance', 'dir_entropy'):
                         for b in ('auroc', 'aupr', 'fpr95'):
-                            curr_res[f'{a}.{b}'] = float(
-                                metric_dict['metric'][f'{a}.{b}'])
+                            curr_res[f'{a}.{b}'] = float(metric_dict['metric'][f'{a}.{b}'])
 
                 if in_dist_valid:
                     curr_res['mIoU'] = float(metric_dict['metric']['mIoU'])
@@ -522,8 +413,7 @@ def main():
 
                 if args.all:
                     for k, v in curr_res.items():
-                        writer.add_scalar(f'test/{k}', v,
-                                          all_checkpoints_iter[i])
+                        writer.add_scalar(f'test/{k}', v, all_checkpoints_iter[i])
 
                 curr_res['iter'] = all_checkpoints_iter[i]
                 ans.append(curr_res)
@@ -559,9 +449,8 @@ def main():
 
     suffixe = re.search(r'(?:[0-9]{14})_(.*)$', args.work_dir).groups()[0]
     with open(
-            os.path.join(
-                args.work_dir, f'test_results_all_{suffixe}.json'
-                if args.all else f'test_results_{suffixe}.json'), 'w') as f:
+            os.path.join(args.work_dir,
+                         f'test_results_all_{suffixe}.json' if args.all else f'test_results_{suffixe}.json'), 'w') as f:
         json.dump(ans, f)
 
     if not hasattr(cfg.model.decode_head, 'vi_nsamples_test'):
@@ -570,13 +459,11 @@ def main():
     reg_ood_summary.to_csv(
         os.path.join(
             args.work_dir,
-            f"reg_ood_metrics_{suffixe}_{fusion_method}{'_subtest' if args.config.endswith('subtest.py') else ''}.csv"  # noqa
-        ))
+            f"reg_ood_metrics_{suffixe}_{fusion_method}{'_subtest' if args.config.endswith('subtest.py') else ''}.csv"))
     sl_ood_summary.to_csv(
         os.path.join(
             args.work_dir,
-            f"sl_ood_metrics_{suffixe}_{fusion_method}{'_subtest' if args.config.endswith('subtest.py') else ''}.csv"  # noqa
-        ))
+            f"sl_ood_metrics_{suffixe}_{fusion_method}{'_subtest' if args.config.endswith('subtest.py') else ''}.csv"))
 
 
 if __name__ == '__main__':

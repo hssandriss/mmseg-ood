@@ -19,31 +19,22 @@ class RoadAnomalyDataset(CustomDataset):
     fixed to '_gtFine_labelTrainIds.png' for Cityscapes dataset.
     """
 
-    CLASSES = ('road', 'sidewalk', 'building', 'wall', 'fence', 'pole',
-               'traffic light', 'traffic sign', 'vegetation', 'terrain', 'sky',
-               'person', 'rider', 'car', 'truck', 'bus', 'train', 'motorcycle',
-               'bicycle')
+    CLASSES = ('road', 'sidewalk', 'building', 'wall', 'fence', 'pole', 'traffic light', 'traffic sign', 'vegetation',
+               'terrain', 'sky', 'person', 'rider', 'car', 'truck', 'bus', 'train', 'motorcycle', 'bicycle')
 
-    PALETTE = [[128, 64, 128], [244, 35, 232], [70, 70, 70], [102, 102, 156],
-               [190, 153, 153], [153, 153, 153], [250, 170, 30], [220, 220, 0],
-               [107, 142, 35], [152, 251, 152], [70, 130, 180], [220, 20, 60],
-               [255, 0, 0], [0, 0, 142], [0, 0, 70], [0, 60, 100],
-               [0, 80, 100], [0, 0, 230], [119, 11, 32]]
+    PALETTE = [[128, 64, 128], [244, 35, 232], [70, 70, 70], [102, 102, 156], [190, 153, 153], [153, 153, 153],
+               [250, 170, 30], [220, 220, 0], [107, 142, 35], [152, 251, 152], [70, 130, 180], [220, 20, 60],
+               [255, 0, 0], [0, 0, 142], [0, 0, 70], [0, 60, 100], [0, 80, 100], [0, 0, 230], [119, 11, 32]]
 
-    def __init__(self,
-                 img_suffix='.jpg',
-                 seg_map_suffix='.labels/labels_semantic_converted.png',
-                 **kwargs):
-        super(RoadAnomalyDataset, self).__init__(
-            img_suffix=img_suffix,
-            seg_map_suffix=seg_map_suffix,
-            reduce_zero_label=False,
-            **kwargs)
+    def __init__(self, img_suffix='.jpg', seg_map_suffix='.labels/labels_semantic_converted.png', **kwargs):
+        super(RoadAnomalyDataset, self).__init__(img_suffix=img_suffix,
+                                                 seg_map_suffix=seg_map_suffix,
+                                                 reduce_zero_label=False,
+                                                 **kwargs)
         self.ood_indices = [25]  # road anomaly has two labels 0 and 25
         self.num_classes = 19  # cityscapes
 
-    def evaluate_ood(self, out_scores,
-                     in_scores) -> Tuple[np.float64, np.float64, np.float64]:
+    def evaluate_ood(self, out_scores, in_scores) -> Tuple[np.float64, np.float64, np.float64]:
         auroc, aupr, fpr = get_ood_measures(out_scores, in_scores)
         return auroc, aupr, fpr
 
@@ -73,24 +64,11 @@ class RoadAnomalyDataset(CustomDataset):
             out_scores = confs[out_index]
         return out_scores, in_scores
 
-    def print_ood_measures(self,
-                           aurocs,
-                           auprs,
-                           fprs,
-                           eces,
-                           logger=None,
-                           text='max_softmax'):
+    def print_ood_measures(self, aurocs, auprs, fprs, eces, logger=None, text='max_softmax'):
         print_measures(aurocs, auprs, fprs, eces, logger=logger, text=text)
 
-    def print_ood_measures_with_std(self,
-                                    aurocs,
-                                    auprs,
-                                    fprs,
-                                    eces,
-                                    logger=None,
-                                    text='max_softmax'):
-        print_measures_with_std(
-            aurocs, auprs, fprs, eces, logger=logger, text=text)
+    def print_ood_measures_with_std(self, aurocs, auprs, fprs, eces, logger=None, text='max_softmax'):
+        print_measures_with_std(aurocs, auprs, fprs, eces, logger=logger, text=text)
 
     def get_ood_masker(self, seg_gt):
         # Find out which pixels are OOD and which are not
@@ -104,15 +82,14 @@ class RoadAnomalyDataset(CustomDataset):
         assert len(seg_gt.size()) == 2
         stride = kernel_size
 
-        patches = seg_gt.unfold(0, kernel_size,
-                                stride).unfold(1, kernel_size, stride)
+        patches = seg_gt.unfold(0, kernel_size, stride).unfold(1, kernel_size, stride)
         unfold_shape = patches.size()
 
         # DO Whatever ops that doesn't change the shape
         ones = torch.ones_like(patches, dtype=torch.bool)
         zeros = torch.zeros_like(patches, dtype=torch.bool)
-        patches_eq_elems = (patches == patches[:, :, 0:1, 0:1]).all(
-            -1, True).all(-2, True).repeat(1, 1, kernel_size, kernel_size)
+        patches_eq_elems = (patches == patches[:, :, 0:1,
+                                               0:1]).all(-1, True).all(-2, True).repeat(1, 1, kernel_size, kernel_size)
         patches = torch.where(patches_eq_elems, zeros, ones)
 
         assert patches.size() == unfold_shape
@@ -133,8 +110,7 @@ class RoadAnomalyDataset(CustomDataset):
         seg_gt = torch.from_numpy(seg_gt)
         assert len(seg_gt.size()) == 2
 
-        patches = seg_gt.unfold(0, kernel_size,
-                                stride).unfold(1, kernel_size, stride)
+        patches = seg_gt.unfold(0, kernel_size, stride).unfold(1, kernel_size, stride)
         unfold_shape = patches.size()
 
         # DO Whatever ops that doesn't change the shape
@@ -204,8 +180,7 @@ class RoadAnomalyDataset(CustomDataset):
             bag_label_maps.append(label_map)
 
             bag_clas_count = class_count[bag_masks[i]]
-            bag_clas_count = np.append(bag_clas_count,
-                                       class_count[~bag_masks[i]].sum())
+            bag_clas_count = np.append(bag_clas_count, class_count[~bag_masks[i]].sum())
             bag_class_counts.append(bag_clas_count)
 
             oth_mask = np.zeros(num_bags, dtype=bool)
@@ -213,12 +188,8 @@ class RoadAnomalyDataset(CustomDataset):
             bag_masks[i] = np.concatenate((bag_masks[i], oth_mask))
             bags_classes.append([*np.where(bag_masks[i])[0]])
 
-        assert all([
-            bag_class_count.sum() == class_count.sum()
-            for bag_class_count in bag_class_counts
-        ])
-        assert np.sum([bag_mask.sum() for bag_mask in bag_masks
-                       ]) == self.num_classes + num_bags
+        assert all([bag_class_count.sum() == class_count.sum() for bag_class_count in bag_class_counts])
+        assert np.sum([bag_mask.sum() for bag_mask in bag_masks]) == self.num_classes + num_bags
 
         self.num_bags = num_bags
         self.label2bag = label2bag
