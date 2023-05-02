@@ -26,107 +26,76 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Train a segmentor')
     parser.add_argument('config', help='train config file path')
     parser.add_argument('--work-dir', help='the dir to save logs and models')
-    parser.add_argument(
-        '--load-from', help='the checkpoint file to load weights from')
-    parser.add_argument(
-        '--resume-from', help='the checkpoint file to resume from')
-    parser.add_argument(
-        '--no-validate',
-        action='store_true',
-        help='whether not to evaluate the checkpoint during training')
+    parser.add_argument('--load-from', help='the checkpoint file to load weights from')
+    parser.add_argument('--resume-from', help='the checkpoint file to resume from')
+    parser.add_argument('--no-validate',
+                        action='store_true',
+                        help='whether not to evaluate the checkpoint during training')
     group_gpus = parser.add_mutually_exclusive_group()
-    group_gpus.add_argument(
-        '--gpus',
-        type=int,
-        help='(Deprecated, please use --gpu-id) number of gpus to use '
-        '(only applicable to non-distributed training)')
-    group_gpus.add_argument(
-        '--gpu-ids',
-        type=int,
-        nargs='+',
-        help='(Deprecated, please use --gpu-id) ids of gpus to use '
-        '(only applicable to non-distributed training)')
-    group_gpus.add_argument(
-        '--gpu-id',
-        type=int,
-        default=0,
-        help='id of gpu to use '
-        '(only applicable to non-distributed training)')
+    group_gpus.add_argument('--gpus',
+                            type=int,
+                            help='(Deprecated, please use --gpu-id) number of gpus to use '
+                            '(only applicable to non-distributed training)')
+    group_gpus.add_argument('--gpu-ids',
+                            type=int,
+                            nargs='+',
+                            help='(Deprecated, please use --gpu-id) ids of gpus to use '
+                            '(only applicable to non-distributed training)')
+    group_gpus.add_argument('--gpu-id',
+                            type=int,
+                            default=0,
+                            help='id of gpu to use '
+                            '(only applicable to non-distributed training)')
     parser.add_argument('--seed', type=int, default=None, help='random seed')
-    parser.add_argument(
-        '--diff_seed',
-        action='store_true',
-        help='Whether or not set different seeds for different ranks')
-    parser.add_argument(
-        '--deterministic',
-        action='store_true',
-        help='whether to set deterministic options for CUDNN backend.')
-    parser.add_argument(
-        '--options',
-        nargs='+',
-        action=DictAction,
-        help="--options is deprecated in favor of --cfg_options' and it will "
-        'not be supported in version v0.22.0. Override some settings in the '
-        'used config, the key-value pair in xxx=yyy format will be merged '
-        'into config file. If the value to be overwritten is a list, it '
-        'should be like key="[a,b]" or key=a,b It also allows nested '
-        'list/tuple values, e.g. key="[(a,b),(c,d)]" Note that the quotation '
-        'marks are necessary and that no white space is allowed.')
-    parser.add_argument(
-        '--cfg-options',
-        nargs='+',
-        action=DictAction,
-        help='override some settings in the used config, the key-value pair '
-        'in xxx=yyy format will be merged into config file. If the value to '
-        'be overwritten is a list, it should be like key="[a,b]" or key=a,b '
-        'It also allows nested list/tuple values, e.g. key="[(a,b),(c,d)]" '
-        'Note that the quotation marks are necessary and that no white space '
-        'is allowed.')
-    parser.add_argument(
-        '--experiment-tag',
-        '--tag',
-        type=str,
-        default='',
-        help='Extra tag to characterize the experiment')
-    parser.add_argument(
-        '--use-bags',
-        action='store_true',
-        help='determines weather to use bags of predictors')
-    parser.add_argument(
-        '--launcher',
-        choices=['none', 'pytorch', 'slurm', 'mpi'],
-        default='none',
-        help='job launcher')
+    parser.add_argument('--diff_seed',
+                        action='store_true',
+                        help='Whether or not set different seeds for different ranks')
+    parser.add_argument('--deterministic',
+                        action='store_true',
+                        help='whether to set deterministic options for CUDNN backend.')
+    parser.add_argument('--options',
+                        nargs='+',
+                        action=DictAction,
+                        help="--options is deprecated in favor of --cfg_options' and it will "
+                        'not be supported in version v0.22.0. Override some settings in the '
+                        'used config, the key-value pair in xxx=yyy format will be merged '
+                        'into config file. If the value to be overwritten is a list, it '
+                        'should be like key="[a,b]" or key=a,b It also allows nested '
+                        'list/tuple values, e.g. key="[(a,b),(c,d)]" Note that the quotation '
+                        'marks are necessary and that no white space is allowed.')
+    parser.add_argument('--cfg-options',
+                        nargs='+',
+                        action=DictAction,
+                        help='override some settings in the used config, the key-value pair '
+                        'in xxx=yyy format will be merged into config file. If the value to '
+                        'be overwritten is a list, it should be like key="[a,b]" or key=a,b '
+                        'It also allows nested list/tuple values, e.g. key="[(a,b),(c,d)]" '
+                        'Note that the quotation marks are necessary and that no white space '
+                        'is allowed.')
+    parser.add_argument('--experiment-tag',
+                        '--tag',
+                        type=str,
+                        default='',
+                        help='Extra tag to characterize the experiment')
+    parser.add_argument('--use-bags', action='store_true', help='determines weather to use bags of predictors')
+    parser.add_argument('--launcher', choices=['none', 'pytorch', 'slurm', 'mpi'], default='none', help='job launcher')
     # When using PyTorch version >= 2.0.0, the `torch.distributed.launch`
     # will pass the `--local-rank` parameter to `tools/train.py` instead
     # of `--local_rank`.
     parser.add_argument('--local_rank', '--local-rank', type=int, default=0)
-    parser.add_argument(
-        '--auto-resume',
-        action='store_true',
-        help='resume from the latest checkpoint automatically.')
-    parser.add_argument(
-        '--freeze-features',
-        action='store_true',
-        help='freeze features till last layer')
-    parser.add_argument(
-        '--freeze-encoder',
-        action='store_true',
-        help='freeze latent representation')
-    parser.add_argument(
-        '--init-not-frozen',
-        action='store_true',
-        help='freeze features till last layer')
+    parser.add_argument('--auto-resume', action='store_true', help='resume from the latest checkpoint automatically.')
+    parser.add_argument('--freeze-features', action='store_true', help='freeze features till last layer')
+    parser.add_argument('--freeze-encoder', action='store_true', help='freeze latent representation')
+    parser.add_argument('--init-not-frozen', action='store_true', help='freeze features till last layer')
 
     args = parser.parse_args()
     if 'LOCAL_RANK' not in os.environ:
         os.environ['LOCAL_RANK'] = str(args.local_rank)
 
     if args.options and args.cfg_options:
-        raise ValueError(
-            '--options and --cfg-options cannot be both '
-            'specified, --options is deprecated in favor of --cfg-options. '
-            '--options will not be supported in version v0.22.0.')
+        raise ValueError('--options and --cfg-options cannot be both '
+                         'specified, --options is deprecated in favor of --cfg-options. '
+                         '--options will not be supported in version v0.22.0.')
     if args.options:
         warnings.warn('--options is deprecated in favor of --cfg-options. '
                       '--options will not be supported in version v0.22.0.')
@@ -210,8 +179,7 @@ def main():
     env_info_dict = collect_env()
     env_info = '\n'.join([f'{k}: {v}' for k, v in env_info_dict.items()])
     dash_line = '-' * 60 + '\n'
-    logger.info('Environment info:\n' + dash_line + env_info + '\n' +
-                dash_line)
+    logger.info('Environment info:\n' + dash_line + env_info + '\n' + dash_line)
     meta['env_info'] = env_info
 
     # log some basic info
@@ -237,32 +205,26 @@ def main():
     if cfg.checkpoint_config is not None:
         # save mmseg version, config file content and class names in
         # checkpoints as meta data
-        cfg.checkpoint_config.meta = dict(
-            mmseg_version=f'{__version__}+{get_git_hash()[:7]}',
-            config=cfg.pretty_text,
-            CLASSES=datasets[0].CLASSES,
-            PALETTE=datasets[0].PALETTE)
+        cfg.checkpoint_config.meta = dict(mmseg_version=f'{__version__}+{get_git_hash()[:7]}',
+                                          config=cfg.pretty_text,
+                                          CLASSES=datasets[0].CLASSES,
+                                          PALETTE=datasets[0].PALETTE)
 
     # Used by bags, ldam...
     # datasets[0].get_class_count()
     if args.use_bags:
         datasets[0].get_bags()
         cfg.model.decode_head.num_classes += datasets[0].num_bags
-    if cfg.model.decode_head.loss_decode.type == 'EDLLoss':
-        cfg.model.decode_head.loss_decode[
-            'total_epochs'] = cfg.runner.max_epochs
-    model = build_segmentor(
-        cfg.model,
-        train_cfg=cfg.get('train_cfg'),
-        test_cfg=cfg.get('test_cfg'))
+    if hasattr(cfg.model.decode_head, 'loss_decode') and cfg.model.decode_head.loss_decode.type == 'EDLLoss':
+        cfg.model.decode_head.loss_decode['total_epochs'] = cfg.runner.max_epochs
+    model = build_segmentor(cfg.model, train_cfg=cfg.get('train_cfg'), test_cfg=cfg.get('test_cfg'))
     model.init_weights()
 
     # SyncBN is not support for DP
     if not distributed:
-        warnings.warn(
-            'SyncBN is only supported with DDP. To be compatible with DP, '
-            'we convert SyncBN to BN. Please use dist_train.sh which can '
-            'avoid this error.')
+        warnings.warn('SyncBN is only supported with DDP. To be compatible with DP, '
+                      'we convert SyncBN to BN. Please use dist_train.sh which can '
+                      'avoid this error.')
         model = revert_sync_batchnorm(model)
 
     logger.info(model)
@@ -274,14 +236,13 @@ def main():
     meta['freeze_features'] = args.freeze_features
     meta['freeze_encoder'] = args.freeze_encoder
     meta['init_not_frozen'] = args.init_not_frozen
-    train_segmentor(
-        model,
-        datasets,
-        cfg,
-        distributed=distributed,
-        validate=(not args.no_validate),
-        timestamp=timestamp,
-        meta=meta)
+    train_segmentor(model,
+                    datasets,
+                    cfg,
+                    distributed=distributed,
+                    validate=(not args.no_validate),
+                    timestamp=timestamp,
+                    meta=meta)
 
 
 if __name__ == '__main__':

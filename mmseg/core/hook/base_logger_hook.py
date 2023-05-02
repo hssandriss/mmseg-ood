@@ -22,11 +22,7 @@ class LoggerHook_(Hook):
 
     __metaclass__ = ABCMeta
 
-    def __init__(self,
-                 interval: int = 10,
-                 ignore_last: bool = True,
-                 reset_flag: bool = False,
-                 by_epoch: bool = True):
+    def __init__(self, interval: int = 10, ignore_last: bool = True, reset_flag: bool = False, by_epoch: bool = True):
         self.interval = interval
         self.ignore_last = ignore_last
         self.reset_flag = reset_flag
@@ -37,9 +33,7 @@ class LoggerHook_(Hook):
         pass
 
     @staticmethod
-    def is_scalar(val,
-                  include_np: bool = True,
-                  include_torch: bool = True) -> bool:
+    def is_scalar(val, include_np: bool = True, include_torch: bool = True) -> bool:
         """Tell the input variable is a scalar or not.
 
         Args:
@@ -111,14 +105,13 @@ class LoggerHook_(Hook):
             tags['momentum'] = momentums[0]
         return tags
 
-    def get_loggable_tags(
-        self,
-        runner,
-        allow_scalar: bool = True,
-        allow_text: bool = False,
-        add_mode: bool = True,
-        tags_to_skip: tuple = ('time', 'data_time')
-    ) -> Dict:
+    def get_loggable_tags(self,
+                          runner,
+                          allow_scalar: bool = True,
+                          allow_text: bool = False,
+                          add_mode: bool = True,
+                          tags_to_skip: tuple = ('time', 'data_time')) -> Dict:
+
         tags = {}
         for var, val in runner.log_buffer.output.items():
             if var in tags_to_skip:
@@ -130,8 +123,9 @@ class LoggerHook_(Hook):
             if add_mode:
                 var = f'{self.get_mode(runner)}/{var}'
             tags[var] = val
-        tags.update(self.get_lr_tags(runner))
-        tags.update(self.get_momentum_tags(runner))
+        if runner.optimizer is not None:
+            tags.update(self.get_lr_tags(runner))
+            tags.update(self.get_momentum_tags(runner))
         return tags
 
     def before_run(self, runner) -> None:

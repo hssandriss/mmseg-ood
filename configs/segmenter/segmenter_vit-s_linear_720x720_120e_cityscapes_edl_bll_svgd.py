@@ -1,6 +1,5 @@
 _base_ = [
-    '../_base_/models/segmenter_vit-b16_mask.py',
-    '../_base_/datasets/cityscapes_720x720_val.py',
+    '../_base_/models/segmenter_vit-b16_mask.py', '../_base_/datasets/cityscapes_720x720.py',
     '../_base_/epoch_runtime.py', '../_base_/schedules/schedule_120e.py'
 ]
 
@@ -16,15 +15,20 @@ model = dict(
     ),
     decode_head=dict(
         _delete_=True,
-        type='FCNBllHead',
+        type='FCNBllSvgdHead',
         in_channels=384,
         channels=384,
         num_convs=0,
         dropout_ratio=0.0,
         concat_input=False,
         num_classes=19,
-        loss_decode=dict(type='EDLLoss', num_classes=19)),
-    test_cfg=dict(mode='whole'))
+        num_particles=20,
+        init_around_w_map=True,
+        logit2evidence='elu',
+        pow_alpha=True,
+        prior_variance=1.,
+        #   loss_decode=dict(type='EDLLoss', num_classes=19)
+    ))
 
 optimizer = dict(lr=0.001, weight_decay=0.0)
 data = dict(

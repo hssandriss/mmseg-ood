@@ -6,7 +6,7 @@ from mmcv.cnn import ConvModule
 
 from mmseg.ops import resize
 from ..builder import HEADS
-from .bll_vi_decode_head import BllBaseDecodeHead
+from .bll_vi_decode_head import BllViBaseDecodeHead
 from .decode_head import BaseDecodeHead
 
 
@@ -22,8 +22,7 @@ class ASPPModule(nn.ModuleList):
         act_cfg (dict): Config of activation layers.
     """
 
-    def __init__(self, dilations, in_channels, channels, conv_cfg, norm_cfg,
-                 act_cfg):
+    def __init__(self, dilations, in_channels, channels, conv_cfg, norm_cfg, act_cfg):
         super(ASPPModule, self).__init__()
         self.dilations = dilations
         self.in_channels = in_channels
@@ -33,15 +32,14 @@ class ASPPModule(nn.ModuleList):
         self.act_cfg = act_cfg
         for dilation in dilations:
             self.append(
-                ConvModule(
-                    self.in_channels,
-                    self.channels,
-                    1 if dilation == 1 else 3,
-                    dilation=dilation,
-                    padding=0 if dilation == 1 else dilation,
-                    conv_cfg=self.conv_cfg,
-                    norm_cfg=self.norm_cfg,
-                    act_cfg=self.act_cfg))
+                ConvModule(self.in_channels,
+                           self.channels,
+                           1 if dilation == 1 else 3,
+                           dilation=dilation,
+                           padding=0 if dilation == 1 else dilation,
+                           conv_cfg=self.conv_cfg,
+                           norm_cfg=self.norm_cfg,
+                           act_cfg=self.act_cfg))
 
     def forward(self, x):
         """Forward function."""
@@ -70,28 +68,25 @@ class ASPPHead(BaseDecodeHead):
         self.dilations = dilations
         self.image_pool = nn.Sequential(
             nn.AdaptiveAvgPool2d(1),
-            ConvModule(
-                self.in_channels,
-                self.channels,
-                1,
-                conv_cfg=self.conv_cfg,
-                norm_cfg=self.norm_cfg,
-                act_cfg=self.act_cfg))
-        self.aspp_modules = ASPPModule(
-            dilations,
-            self.in_channels,
-            self.channels,
-            conv_cfg=self.conv_cfg,
-            norm_cfg=self.norm_cfg,
-            act_cfg=self.act_cfg)
-        self.bottleneck = ConvModule(
-            (len(dilations) + 1) * self.channels,
-            self.channels,
-            3,
-            padding=1,
-            conv_cfg=self.conv_cfg,
-            norm_cfg=self.norm_cfg,
-            act_cfg=self.act_cfg)
+            ConvModule(self.in_channels,
+                       self.channels,
+                       1,
+                       conv_cfg=self.conv_cfg,
+                       norm_cfg=self.norm_cfg,
+                       act_cfg=self.act_cfg))
+        self.aspp_modules = ASPPModule(dilations,
+                                       self.in_channels,
+                                       self.channels,
+                                       conv_cfg=self.conv_cfg,
+                                       norm_cfg=self.norm_cfg,
+                                       act_cfg=self.act_cfg)
+        self.bottleneck = ConvModule((len(dilations) + 1) * self.channels,
+                                     self.channels,
+                                     3,
+                                     padding=1,
+                                     conv_cfg=self.conv_cfg,
+                                     norm_cfg=self.norm_cfg,
+                                     act_cfg=self.act_cfg)
 
     def _forward_feature(self, inputs):
         """Forward function for feature maps before classifying each pixel with
@@ -105,13 +100,7 @@ class ASPPHead(BaseDecodeHead):
                 H, W) which is feature map for last layer of decoder head.
         """
         x = self._transform_inputs(inputs)
-        aspp_outs = [
-            resize(
-                self.image_pool(x),
-                size=x.size()[2:],
-                mode='bilinear',
-                align_corners=self.align_corners)
-        ]
+        aspp_outs = [resize(self.image_pool(x), size=x.size()[2:], mode='bilinear', align_corners=self.align_corners)]
         aspp_outs.extend(self.aspp_modules(x))
         aspp_outs = torch.cat(aspp_outs, dim=1)
         feats = self.bottleneck(aspp_outs)
@@ -127,7 +116,7 @@ class ASPPHead(BaseDecodeHead):
 
 
 @HEADS.register_module()
-class ASPPBllHead(BllBaseDecodeHead):
+class ASPPBllViHead(BllViBaseDecodeHead):
     """Rethinking Atrous Convolution for Semantic Image Segmentation.
 
     This head is the implementation of `DeepLabV3
@@ -139,33 +128,30 @@ class ASPPBllHead(BllBaseDecodeHead):
     """
 
     def __init__(self, dilations=(1, 6, 12, 18), **kwargs):
-        super(ASPPBllHead, self).__init__(**kwargs)
+        super(ASPPBllViHead, self).__init__(**kwargs)
         assert isinstance(dilations, (list, tuple))
         self.dilations = dilations
         self.image_pool = nn.Sequential(
             nn.AdaptiveAvgPool2d(1),
-            ConvModule(
-                self.in_channels,
-                self.channels,
-                1,
-                conv_cfg=self.conv_cfg,
-                norm_cfg=self.norm_cfg,
-                act_cfg=self.act_cfg))
-        self.aspp_modules = ASPPModule(
-            dilations,
-            self.in_channels,
-            self.channels,
-            conv_cfg=self.conv_cfg,
-            norm_cfg=self.norm_cfg,
-            act_cfg=self.act_cfg)
-        self.bottleneck = ConvModule(
-            (len(dilations) + 1) * self.channels,
-            self.channels,
-            3,
-            padding=1,
-            conv_cfg=self.conv_cfg,
-            norm_cfg=self.norm_cfg,
-            act_cfg=self.act_cfg)
+            ConvModule(self.in_channels,
+                       self.channels,
+                       1,
+                       conv_cfg=self.conv_cfg,
+                       norm_cfg=self.norm_cfg,
+                       act_cfg=self.act_cfg))
+        self.aspp_modules = ASPPModule(dilations,
+                                       self.in_channels,
+                                       self.channels,
+                                       conv_cfg=self.conv_cfg,
+                                       norm_cfg=self.norm_cfg,
+                                       act_cfg=self.act_cfg)
+        self.bottleneck = ConvModule((len(dilations) + 1) * self.channels,
+                                     self.channels,
+                                     3,
+                                     padding=1,
+                                     conv_cfg=self.conv_cfg,
+                                     norm_cfg=self.norm_cfg,
+                                     act_cfg=self.act_cfg)
 
         self.w_shape = self.conv_seg.weight.shape
         self.b_shape = self.conv_seg.bias.shape
@@ -174,8 +160,7 @@ class ASPPBllHead(BllBaseDecodeHead):
         self.b_numel = self.conv_seg.bias.numel()
 
         self.ll_param_numel = self.w_numel + self.b_numel
-        self.density_estimation_to_params = nn.Linear(
-            self.vi_latent_dim, self.ll_param_numel, bias=False)
+        self.density_estimation_to_params = nn.Linear(self.vi_latent_dim, self.ll_param_numel, bias=False)
         self.build_density_estimator()
 
     def _forward_feature(self, inputs):
@@ -191,13 +176,7 @@ class ASPPBllHead(BllBaseDecodeHead):
         """
         x = self._transform_inputs(inputs)
         low_feats = self.image_pool(x)
-        aspp_outs = [
-            resize(
-                low_feats,
-                size=x.size()[2:],
-                mode='bilinear',
-                align_corners=self.align_corners)
-        ]
+        aspp_outs = [resize(low_feats, size=x.size()[2:], mode='bilinear', align_corners=self.align_corners)]
         aspp_outs.extend(self.aspp_modules(x))
         aspp_outs = torch.cat(aspp_outs, dim=1)
         feats = self.bottleneck(aspp_outs)
@@ -216,8 +195,7 @@ class ASPPBllHead(BllBaseDecodeHead):
         if nsamples == 1 and self.density_type == 'flow':
             # z0 = self.density_estimation.z0_mean.data.unsqueeze(0)
             z0 = self.density_estimation.sample_base(1)
-            zk, sum_log_jacobians = self.density_estimation.forward_flow(
-                z0, low_feats)
+            zk, sum_log_jacobians = self.density_estimation.forward_flow(z0, low_feats)
             output = self.cls_seg_x(output, zk)
             # Reverse KLD: https://arxiv.org/abs/1912.02762 page 7 Eq. 17-18
             kl = -sum_log_jacobians.mean()
@@ -228,52 +206,44 @@ class ASPPBllHead(BllBaseDecodeHead):
             return output, kl
         elif nsamples > 1 and self.density_type == 'flow':
             z0 = self.density_estimation.sample_base(nsamples)
-            zk, sum_log_jacobians = self.density_estimation.forward_flow(
-                z0, low_feats)
+            zk, sum_log_jacobians = self.density_estimation.forward_flow(z0, low_feats)
             output = self.cls_seg_x(output, zk)
             # Reverse KLD: https://arxiv.org/abs/1912.02762 page 7 Eq. 17-18
-            kl = self.density_estimation.flow_kl_loss(z0, zk,
-                                                      sum_log_jacobians)
+            kl = self.density_estimation.flow_kl_loss(z0, zk, sum_log_jacobians)
             # kl = self.density_estimation.flow_kl_loss_analytical(
             #     sum_log_jacobians)
             return output, kl
         elif nsamples == 1 and self.density_type == 'conditional_flow':
             z0 = self.density_estimation.z0_mean.data.unsqueeze(0)
-            zk, sum_log_jacobians = self.density_estimation.forward_flow(
-                z0, low_feats)
+            zk, sum_log_jacobians = self.density_estimation.forward_flow(z0, low_feats)
             output = self.cls_seg(output, zk)
             # Reverse KLD: https://arxiv.org/abs/1912.02762 page 7 Eq. 17-18
             # kl = - sum_log_jacobians.mean()
-            kl = self.density_estimation.flow_kl_loss(z0, zk,
-                                                      sum_log_jacobians)
+            kl = self.density_estimation.flow_kl_loss(z0, zk, sum_log_jacobians)
             # kl = self.density_estimation.flow_kl_loss_analytical(
             #     sum_log_jacobians)
             return output, kl
         elif nsamples > 1 and self.density_type == 'conditional_flow':
             z0 = self.density_estimation.sample_base(nsamples)
-            zk, sum_log_jacobians = self.density_estimation.forward_flow(
-                z0, low_feats)
+            zk, sum_log_jacobians = self.density_estimation.forward_flow(z0, low_feats)
             if self.training:
                 output = self.cls_seg(output, zk)
             else:
                 output = self.cls_seg_x(output, zk)
             # Reverse KLD: https://arxiv.org/abs/1912.02762 page 7 Eq. 17-18
             # kl = - sum_log_jacobians.mean()
-            kl = self.density_estimation.flow_kl_loss(z0, zk,
-                                                      sum_log_jacobians)
+            kl = self.density_estimation.flow_kl_loss(z0, zk, sum_log_jacobians)
             # kl = self.density_estimation.flow_kl_loss_analytical(
             #     sum_log_jacobians)
 
             return output, kl
-        elif nsamples == 1 and self.density_type in ('full_normal',
-                                                     'fact_normal'):
+        elif nsamples == 1 and self.density_type in ('full_normal', 'fact_normal'):
             L = self.density_estimation._L
             zk = self.density_estimation.mu.data.unsqueeze(0)
             kl = self.density_estimation.normal_kl_loss(L)
             output = self.cls_seg_x(output, zk)
             return output, kl
-        elif nsamples > 1 and self.density_type in ('full_normal',
-                                                    'fact_normal'):
+        elif nsamples > 1 and self.density_type in ('full_normal', 'fact_normal'):
             L = self.density_estimation._L
             z0 = self.density_estimation.sample_base(nsamples)
             zk = self.density_estimation.forward_normal(z0, L)
@@ -295,10 +265,9 @@ class ASPPBllHead(BllBaseDecodeHead):
             # dropout_x = x
             z_ = z_.squeeze()
             output.append(
-                F.conv2d(
-                    input=dropout_x,
-                    weight=z_[:self.w_numel].reshape(self.w_shape),
-                    bias=z_[-self.b_numel:].reshape(self.b_shape)))
+                F.conv2d(input=dropout_x,
+                         weight=z_[:self.w_numel].reshape(self.w_shape),
+                         bias=z_[-self.b_numel:].reshape(self.b_shape)))
         return torch.cat(output, dim=0)
 
     def conv_seg_forward(self, x, z):
@@ -315,9 +284,8 @@ class ASPPBllHead(BllBaseDecodeHead):
             dropout_x = self.dropout(x_)
             z_ = z_.squeeze()
             output.append(
-                F.conv2d(
-                    input=dropout_x,
-                    weight=z_[:self.w_numel].reshape(self.w_shape),
-                    bias=z_[-self.b_numel:].reshape(self.b_shape)))
+                F.conv2d(input=dropout_x,
+                         weight=z_[:self.w_numel].reshape(self.w_shape),
+                         bias=z_[-self.b_numel:].reshape(self.b_shape)))
         assert len(output) == z.size(0)
         return torch.cat(output, dim=0)

@@ -68,13 +68,7 @@ def set_random_seed(seed, deterministic=False):
         torch.backends.cudnn.benchmark = False
 
 
-def train_segmentor(model,
-                    dataset,
-                    cfg,
-                    distributed=False,
-                    validate=False,
-                    timestamp=None,
-                    meta=None):
+def train_segmentor(model, dataset, cfg, distributed=False, validate=False, timestamp=None, meta=None):
     """Launch segmentor training."""
     logger = get_root_logger(cfg.log_level)
     # prepare data loaders
@@ -89,10 +83,8 @@ def train_segmentor(model,
     # The overall dataloader settings
     loader_cfg.update({
         k: v
-        for k, v in cfg.data.items() if k not in [
-            'train', 'val', 'test', 'train_dataloader', 'val_dataloader',
-            'test_dataloader'
-        ]
+        for k, v in cfg.data.items()
+        if k not in ['train', 'val', 'test', 'train_dataloader', 'val_dataloader', 'test_dataloader']
     })
 
     # The specific dataloader settings
@@ -104,12 +96,11 @@ def train_segmentor(model,
         find_unused_parameters = cfg.get('find_unused_parameters', False)
         # Sets the `find_unused_parameters` parameter in
         # DDP wrapper
-        model = build_ddp(
-            model,
-            cfg.device,
-            device_ids=[int(os.environ['LOCAL_RANK'])],
-            broadcast_buffers=False,
-            find_unused_parameters=find_unused_parameters)
+        model = build_ddp(model,
+                          cfg.device,
+                          device_ids=[int(os.environ['LOCAL_RANK'])],
+                          broadcast_buffers=False,
+                          find_unused_parameters=find_unused_parameters)
     else:
         if not torch.cuda.is_available():
             assert digit_version(mmcv.__version__) >= digit_version('1.4.4'), \
@@ -122,77 +113,63 @@ def train_segmentor(model,
     freeze_encoder = meta.pop('freeze_encoder', False)
     # reinitialize the last layer parameters
     init_not_frozen = meta.pop('init_not_frozen', False)
-    # Check if we are applying BLL
-    is_bll = 'bll' in cfg.model.decode_head.type.lower()
-    # freeze_features = True
-    # init_not_frozen = True
-    if is_bll:
+
+    # Check if we are applying BLL either using VI or SVGD
+    is_bll_vi = 'bllvi' in cfg.model.decode_head.type.lower()
+    is_bll_svgd = 'bllsvgd' in cfg.model.decode_head.type.lower()
+    if is_bll_vi:
         optim_type = cfg.optimizer.pop('type')
         if optim_type == 'SGD':
             optimizer = torch.optim.SGD(
-                params=[
-                    p for name, p in model.named_parameters()
-                    if 'density_estimation' in name
-                ],
-                **cfg.optimizer)
+                params=[p for name, p in model.named_parameters() if 'density_estimation' in name], **cfg.optimizer)
         elif optim_type == 'Adam':
             cfg.optimizer.pop('momentum')
             optimizer = torch.optim.Adam(
-                params=[
-                    p for name, p in model.named_parameters()
-                    if 'density_estimation' in name
-                ],
-                **cfg.optimizer)
+                params=[p for name, p in model.named_parameters() if 'density_estimation' in name], **cfg.optimizer)
         else:
             raise NotImplementedError
+    elif is_bll_svgd:
+        optimizer = None  # No optimizer needed
     else:
         if freeze_features:
             optim_type = cfg.optimizer.pop('type')
-            optimizer = torch.optim.SGD(
-                params=[
-                    p for name, p in model.named_parameters()
-                    if 'conv_seg' in name
-                ],
-                **cfg.optimizer)
+            optimizer = torch.optim.SGD(params=[p for name, p in model.named_parameters() if 'conv_seg' in name],
+                                        **cfg.optimizer)
         elif freeze_encoder:
             raise NotImplementedError
-            optim_type = cfg.optimizer.pop('type')
-            optimizer = torch.optim.SGD(
-                params=[
-                    p for name, p in model.named_parameters()
-                    if 'conv_seg' in name
-                ],
-                **cfg.optimizer)
         else:
             optimizer = build_optimizer(model, cfg.optimizer)
 
     if cfg.get('runner') is None:
         cfg.runner = {'type': 'IterBasedRunner', 'max_iters': cfg.total_iters}
-        warnings.warn(
-            'config is now expected to have a `runner` section, '
-            'please set `runner` in your config.', UserWarning)
+        warnings.warn('config is now expected to have a `runner` section, '
+                      'please set `runner` in your config.', UserWarning)
     # build runner
-    assert not (freeze_encoder and freeze_features
-                ), 'freeze encoder and freeze features are mutually exclusive'
-    runner = build_runner(
-        cfg.runner,
-        default_args=dict(
-            model=model,
-            batch_processor=None,
-            optimizer=optimizer,
-            work_dir=cfg.work_dir,
-            logger=logger,
-            meta=meta))
+    assert not (freeze_encoder and freeze_features), 'freeze encoder and freeze features are mutually exclusive'
+    runner = build_runner(cfg.runner,
+                          default_args=dict(model=model,
+                                            batch_processor=None,
+                                            optimizer=optimizer,
+                                            work_dir=cfg.work_dir,
+                                            logger=logger,
+                                            meta=meta))
 
     if cfg.device == 'npu':
         optimiter_config = dict(type='Fp16OptimizerHook', loss_scale='dynamic')
         cfg.optimizer_config = optimiter_config if \
             not cfg.optimizer_config else cfg.optimizer_config
-
     # register hooks
-    runner.register_training_hooks(cfg.lr_config, cfg.optimizer_config,
-                                   cfg.checkpoint_config, cfg.log_config,
-                                   cfg.get('momentum_config', None))
+    if is_bll_svgd:
+        runner.register_training_hooks(lr_config=None,
+                                       optimizer_config=None,
+                                       checkpoint_config=cfg.checkpoint_config,
+                                       log_config=cfg.log_config,
+                                       momentum_config=None,
+                                       timer_config=dict(type='IterTimerHook'),
+                                       custom_hooks_config=None)
+    else:
+        runner.register_training_hooks(cfg.lr_config, cfg.optimizer_config, cfg.checkpoint_config, cfg.log_config,
+                                       cfg.get('momentum_config', None))
 
     if distributed:
         # when distributed training by epoch, using`DistSamplerSeedHook` to set
@@ -220,8 +197,7 @@ def train_segmentor(model,
         eval_hook = DistEvalHook if distributed else EvalHook
         # In this PR (https://github.com/open-mmlab/mmcv/pull/1193), the
         # priority of IterTimerHook has been modified from 'NORMAL' to 'LOW'.
-        runner.register_hook(
-            eval_hook(val_dataloader, **eval_cfg), priority='LOW')
+        runner.register_hook(eval_hook(val_dataloader, **eval_cfg), priority='LOW')
 
     # user-defined hooks
     if cfg.get('custom_hooks', None):
@@ -236,7 +212,7 @@ def train_segmentor(model,
             priority = hook_cfg.pop('priority', 'NORMAL')
             hook = build_from_cfg(hook_cfg, HOOKS)
             runner.register_hook(hook, priority=priority)
-    if is_bll:
+    if is_bll_vi or is_bll_svgd:
         assert cfg.load_from or cfg.resume_from or cfg.auto_resume, \
             'It is required to pre-learned features for BLL'
 
@@ -245,28 +221,21 @@ def train_segmentor(model,
         if resume_from is not None:
             cfg.resume_from = resume_from
 
-    if cfg.resume_from and is_bll:
+    if cfg.resume_from and (is_bll_vi or is_bll_svgd):
         runner.resume(cfg.resume_from)
         runner.model.module.freeze_encoder()
         runner.model.module.freeze_feature_extractor()
         runner.model.module.freeze_decoder_except_density_estimation()
-    elif cfg.resume_from and not is_bll:
+    elif cfg.resume_from and not (is_bll_vi or is_bll_svgd):
         runner.resume(cfg.resume_from)
-    elif cfg.load_from and is_bll:
+    elif cfg.load_from and (is_bll_vi or is_bll_svgd):
         runner.load_checkpoint(cfg.load_from)
         runner.model.module.freeze_encoder()
         runner.model.module.freeze_decoder_except_density_estimation()
-    elif cfg.load_from and not is_bll:
+    elif cfg.load_from and not (is_bll_vi or is_bll_svgd):
         if freeze_encoder and init_not_frozen:
             ckpt = torch.load(cfg.load_from)
-            # to_keep = [
-            #     k for k in ckpt['state_dict'].keys()
-            #     if k.startswith('backbone')
-            # ]
-            to_delete = [
-                k for k in ckpt['state_dict'].keys()
-                if not k.startswith('backbone')
-            ]
+            to_delete = [k for k in ckpt['state_dict'].keys() if not k.startswith('backbone')]
             for k in to_delete:
                 del ckpt['state_dict'][k]
             cfg.load_from = os.path.join(cfg.work_dir, 'src.pth')
@@ -276,15 +245,7 @@ def train_segmentor(model,
             runner.model.module.freeze_feature_extractor()
         elif freeze_features and init_not_frozen:
             ckpt = torch.load(cfg.load_from)
-            to_delete = [
-                k for k in ckpt['state_dict'].keys()
-                if k.startswith('decode_head.conv_seg')
-            ]
-            # to_keep = [
-            #     k for k in ckpt['state_dict'].keys()
-            #     if not k.startswith('decode_head.conv_seg')
-            # ]
-
+            to_delete = [k for k in ckpt['state_dict'].keys() if k.startswith('decode_head.conv_seg')]
             for k in to_delete:
                 del ckpt['state_dict'][k]
             cfg.load_from = os.path.join(cfg.work_dir, 'src.pth')
@@ -297,11 +258,12 @@ def train_segmentor(model,
     else:
         pass
 
-    if is_bll and cfg.model.decode_head.density_type in ('flow',
-                                                         'conditional_flow'):
-        if (runner.model.module.decode_head.initialize_at_w_map
-                and not cfg.model.decode_head.vi_use_lower_dim):
+    if is_bll_vi and cfg.model.decode_head.density_type in ('flow', 'conditional_flow'):
+        if (runner.model.module.decode_head.initialize_at_w_map and not cfg.model.decode_head.vi_use_lower_dim):
             runner.model.module.decode_head.update_z0_params()
         runner.model.module.decode_head.density_estimation.tdist_to_device()
+    elif is_bll_svgd:
+        device = next(iter(runner.model.module.decode_head.parameters()))
+        runner.model.module.decode_head.svgd.tdist_to_device(device)
 
     runner.run(data_loaders, cfg.workflow)

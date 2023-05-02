@@ -13,15 +13,15 @@ def elu_evidence(logits):
     return F.elu(logits) + 1
 
 
+def exp_evidence(logits):
+    return torch.exp(torch.clip(logits, -20., 20.))
+
+
 def sigmoid_evidence(logits):
     max_evidence = 1e3
     shift = 35
     slope = .1
     return torch.sigmoid(slope * (logits - shift)) * max_evidence
-
-
-def exp_evidence(logits):
-    return torch.exp(torch.clip(logits, -20., 20.))
 
 
 def exp_stable_evidence(logits):
