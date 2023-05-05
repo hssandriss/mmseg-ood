@@ -176,6 +176,7 @@ def single_gpu_test(model,
     if hasattr(torchmodel.decode_head,
                'density_type') and torchmodel.decode_head.density_type in ('flow', 'conditional_flow'):
         torchmodel.decode_head.density_estimation.tdist_to_device()
+        # torchmodel.decode_head.density_estimation_b.tdist_to_device()
 
     def logit2alpha(x):
         # for EDL
