@@ -443,7 +443,7 @@ def main():
         print(f"{sl_ood_summary.loc[i, 'dir_entropy.auroc']*100:.2f}&"
               f"{sl_ood_summary.loc[i, 'dir_entropy.aupr']*100:.2f}&"
               f"{sl_ood_summary.loc[i, 'dir_entropy.fpr95']*100:.2f}")
-    else:
+    elif reg_ood_valid:
         print("w/ max_prob:")
         print(f"{reg_ood_summary.loc[i, 'max_prob.auroc']*100:.2f}&"
               f"{reg_ood_summary.loc[i, 'max_prob.aupr']*100:.2f}&"
@@ -456,7 +456,8 @@ def main():
         print(f"{reg_ood_summary.loc[i, 'emp_entropy.auroc']*100:.2f}&"
               f"{reg_ood_summary.loc[i, 'emp_entropy.aupr']*100:.2f}&"
               f"{reg_ood_summary.loc[i, 'emp_entropy.fpr95']*100:.2f}")
-
+    else:
+        print("Not OOD valid!")
     suffixe = re.search(r'(?:[0-9]{14})_(.*)$', args.work_dir).groups()[0]
     with open(
             os.path.join(args.work_dir,
