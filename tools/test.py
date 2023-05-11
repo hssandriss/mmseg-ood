@@ -12,8 +12,7 @@ import mmcv
 import pandas as pd
 import torch
 from mmcv.cnn.utils import revert_sync_batchnorm
-from mmcv.runner import (get_dist_info, init_dist, load_checkpoint,
-                         wrap_fp16_model)
+from mmcv.runner import (get_dist_info, init_dist, load_checkpoint, wrap_fp16_model)
 from mmcv.utils import DictAction
 from torch.utils.tensorboard import SummaryWriter
 
@@ -231,7 +230,7 @@ def main():
         'max_logit.fpr95', 'emp_entropy.auroc', 'emp_entropy.aupr', 'emp_entropy.fpr95'
     ])
     sl_ood_summary = pd.DataFrame(columns=[
-        'epoch', 'u.auroc', 'u.aupr', 'u.fpr95', 'disonnance.auroc', 'disonnance.aupr', 'disonnance.fpr95',
+        'epoch', 'u.auroc', 'u.aupr', 'u.fpr95', 'dissonance.auroc', 'dissonance.aupr', 'dissonance.fpr95',
         'dir_entropy.auroc', 'dir_entropy.aupr', 'dir_entropy.fpr95'
     ])
 
@@ -388,9 +387,9 @@ def main():
                         round(float(metric_dict['metric']['u.auroc']), 4),
                         round(float(metric_dict['metric']['u.aupr']), 4),
                         round(float(metric_dict['metric']['u.fpr95']), 4),
-                        round(float(metric_dict['metric']['disonnance.auroc']), 4),
-                        round(float(metric_dict['metric']['disonnance.aupr']), 4),
-                        round(float(metric_dict['metric']['disonnance.fpr95']), 4),
+                        round(float(metric_dict['metric']['dissonance.auroc']), 4),
+                        round(float(metric_dict['metric']['dissonance.aupr']), 4),
+                        round(float(metric_dict['metric']['dissonance.fpr95']), 4),
                         round(float(metric_dict['metric']['dir_entropy.auroc']), 4),
                         round(float(metric_dict['metric']['dir_entropy.aupr']), 4),
                         round(float(metric_dict['metric']['dir_entropy.fpr95']), 4)
@@ -402,7 +401,7 @@ def main():
                                                        ])
                     sl_ood_summary = sl_ood_summary.append(curr_iter_sl_ood_df, ignore_index=True)
 
-                    for a in ('u', 'disonnance', 'dir_entropy'):
+                    for a in ('u', 'dissonance', 'dir_entropy'):
                         for b in ('auroc', 'aupr', 'fpr95'):
                             curr_res[f'{a}.{b}'] = float(metric_dict['metric'][f'{a}.{b}'])
 
@@ -419,33 +418,44 @@ def main():
                 ans.append(curr_res)
 
     print('For latex:')
-
     if sl_ood_valid:
-        print(f"{reg_ood_summary.loc[i, 'max_prob.auroc']*100}&"
-              f"{reg_ood_summary.loc[i, 'max_prob.aupr']*100}&"
-              f"{reg_ood_summary.loc[i, 'max_prob.fpr95']*100}")
-        print(f"{reg_ood_summary.loc[i, 'max_logit.auroc']*100}&"
-              f"{reg_ood_summary.loc[i, 'max_logit.aupr']*100}&"
-              f"{reg_ood_summary.loc[i, 'max_logit.fpr95']*100}")
-        print(f"{reg_ood_summary.loc[i, 'emp_entropy.auroc']*100}&"
-              f"{reg_ood_summary.loc[i, 'emp_entropy.aupr']*100}&"
-              f"{reg_ood_summary.loc[i, 'emp_entropy.fpr95']*100}")
-        print(f"{sl_ood_summary.loc[i, 'u.auroc']*100}&"
-              f"{sl_ood_summary.loc[i, 'u.aupr']*100}&"
-              f"{sl_ood_summary.loc[i, 'u.fpr95']*100}")
-        print(f"{sl_ood_summary.loc[i, 'dissonance.auroc']*100}&"
-              f"{sl_ood_summary.loc[i, 'dissonance.aupr']*100}&"
-              f"{sl_ood_summary.loc[i, 'dissonance.fpr95']*100}")
+        print("\nw/ max_prob:")
+        print(f"{reg_ood_summary.loc[i, 'max_prob.auroc']*100:.2f}&"
+              f"{reg_ood_summary.loc[i, 'max_prob.aupr']*100:.2f}&"
+              f"{reg_ood_summary.loc[i, 'max_prob.fpr95']*100:.2f}")
+        print("\nw/ max_logit:")
+        print(f"{reg_ood_summary.loc[i, 'max_logit.auroc']*100:.2f}&"
+              f"{reg_ood_summary.loc[i, 'max_logit.aupr']*100:.2f}&"
+              f"{reg_ood_summary.loc[i, 'max_logit.fpr95']*100:.2f}")
+        print("\nw/ emp_entropy:")
+        print(f"{reg_ood_summary.loc[i, 'emp_entropy.auroc']*100:.2f}&"
+              f"{reg_ood_summary.loc[i, 'emp_entropy.aupr']*100:.2f}&"
+              f"{reg_ood_summary.loc[i, 'emp_entropy.fpr95']*100:.2f}")
+        print("\nw/ u:")
+        print(f"{sl_ood_summary.loc[i, 'u.auroc']*100:.2f}&"
+              f"{sl_ood_summary.loc[i, 'u.aupr']*100:.2f}&"
+              f"{sl_ood_summary.loc[i, 'u.fpr95']*100:.2f}")
+        print("\nw/ dissonance:")
+        print(f"{sl_ood_summary.loc[i, 'dissonance.auroc']*100:.2f}&"
+              f"{sl_ood_summary.loc[i, 'dissonance.aupr']*100:.2f}&"
+              f"{sl_ood_summary.loc[i, 'dissonance.fpr95']*100:.2f}")
+        print("\nw/ dir_entropy:")
+        print(f"{sl_ood_summary.loc[i, 'dir_entropy.auroc']*100:.2f}&"
+              f"{sl_ood_summary.loc[i, 'dir_entropy.aupr']*100:.2f}&"
+              f"{sl_ood_summary.loc[i, 'dir_entropy.fpr95']*100:.2f}")
     else:
-        print(f"{reg_ood_summary.loc[i, 'max_prob.auroc']*100}&"
-              f"{reg_ood_summary.loc[i, 'max_prob.aupr']*100}&"
-              f"{reg_ood_summary.loc[i, 'max_prob.fpr95']*100}")
-        print(f"{reg_ood_summary.loc[i, 'max_logit.auroc']*100}&"
-              f"{reg_ood_summary.loc[i, 'max_logit.aupr']*100}&"
-              f"{reg_ood_summary.loc[i, 'max_logit.fpr95']*100}")
-        print(f"{reg_ood_summary.loc[i, 'emp_entropy.auroc']*100}&"
-              f"{reg_ood_summary.loc[i, 'emp_entropy.aupr']*100}&"
-              f"{reg_ood_summary.loc[i, 'emp_entropy.fpr95']*100}")
+        print("w/ max_prob:")
+        print(f"{reg_ood_summary.loc[i, 'max_prob.auroc']*100:.2f}&"
+              f"{reg_ood_summary.loc[i, 'max_prob.aupr']*100:.2f}&"
+              f"{reg_ood_summary.loc[i, 'max_prob.fpr95']*100:.2f}")
+        print("w/ max_logit:")
+        print(f"{reg_ood_summary.loc[i, 'max_logit.auroc']*100:.2f}&"
+              f"{reg_ood_summary.loc[i, 'max_logit.aupr']*100:.2f}&"
+              f"{reg_ood_summary.loc[i, 'max_logit.fpr95']*100:.2f}")
+        print("w/ emp_entropy:")
+        print(f"{reg_ood_summary.loc[i, 'emp_entropy.auroc']*100:.2f}&"
+              f"{reg_ood_summary.loc[i, 'emp_entropy.aupr']*100:.2f}&"
+              f"{reg_ood_summary.loc[i, 'emp_entropy.fpr95']*100:.2f}")
 
     suffixe = re.search(r'(?:[0-9]{14})_(.*)$', args.work_dir).groups()[0]
     with open(
