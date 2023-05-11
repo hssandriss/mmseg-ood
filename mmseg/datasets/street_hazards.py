@@ -68,30 +68,31 @@ class StreetHazardsDataset(CustomDataset):
         return auroc, apr, fpr
 
     def get_in_out_conf(self, pred_confs, seg_gt, conf_type):
-        assert conf_type in ('max_prob', 'max_logit', 'entropy', 'vacuity', 'dissonance')
+        # conf_type could be (lo or hi)
+        # lo means that ood have lower values
+        # hi means that ood have higher values
+
+        assert conf_type in ('lo', 'hi')
         confs = deepcopy(pred_confs)
         # Mask ignored index
-
         mask = (seg_gt != self.ignore_index)
 
         seg_gt = seg_gt[mask]
         confs = confs.squeeze()[mask]
 
+        # Find out which pixels are OOD and which are not
         out_index = (seg_gt == self.ood_indices[0])
         for label in self.ood_indices:
             out_index = np.logical_or(out_index, (seg_gt == label))
-
-        if conf_type == 'max_logit':
+        if conf_type == 'hi':
             in_scores = -confs[np.logical_not(out_index)]
             out_scores = -confs[out_index]
-        elif conf_type == 'max_prob':
-            in_scores = 1 - confs[np.logical_not(out_index)]
-            out_scores = 1 - confs[out_index]
         else:
-            # entropy, vacuity, dissonance: larger score => OOD
+            # entropy, vacuity, dissonance
             in_scores = confs[np.logical_not(out_index)]
             out_scores = confs[out_index]
         return out_scores, in_scores
+
 
     def print_ood_measures(self, aurocs, auprs, fprs, eces, logger=None, text='max_softmax'):
         print_measures(aurocs, auprs, fprs, eces, logger=logger, text=text)

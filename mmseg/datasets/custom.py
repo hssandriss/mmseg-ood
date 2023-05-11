@@ -110,7 +110,8 @@ class CustomDataset(Dataset):
         self.reduce_zero_label = reduce_zero_label
         self.label_map = None
         self.CLASSES, self.PALETTE = self.get_classes_and_palette(classes, palette)
-        self.gt_seg_map_loader = LoadAnnotations(reduce_zero_label=reduce_zero_label, **gt_seg_map_loader_cfg)
+        self.gt_seg_map_loader = LoadAnnotations() if gt_seg_map_loader_cfg is None else LoadAnnotations(
+            **gt_seg_map_loader_cfg)
 
         self.file_client_args = file_client_args
         self.file_client = mmcv.FileClient.infer_client(self.file_client_args)
